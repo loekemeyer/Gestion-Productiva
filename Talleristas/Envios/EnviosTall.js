@@ -5,6 +5,7 @@ const SUPABASE_URL = "https://hrxfctzncixxqmpfhskv.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhyeGZjdHpuY2l4eHFtcGZoc2t2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI3MjQyNjEsImV4cCI6MjA4ODMwMDI2MX0.4L6wguch8UZGhC2VpzrWcCjJGUV-IkYsl9JoCWrOLUs";
 
 const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+window.__sbClient__ = supabaseClient; // expuesto para cajones-popup.js
 
 /*************************************************
  * ELEMENTOS DEL DOM
@@ -755,28 +756,26 @@ function calcularCajones(consumoTotal, kgXUni, partesXUni, kgXCajon){
  *************************************************/
 function actualizarFaltanteRow(row, esInicial = false){
   const esperado = Number(row.dataset.cajonesEsperados || 0);
-
-  const inputCaj = row.querySelector(".input-caj");
   const box = row.querySelector(".faltante-box");
+  const esCarton = row.dataset.esCarton === "1";
+  if (!box) return;
 
-  if (!inputCaj || !box) return;
-
-  const cargadoCaj = parseInputNumber(inputCaj.value);
+  // Para cartones la lógica sigue con input-uni; para resto, lee dataset.cajones (popup-driven)
+  const cargadoCaj = esCarton
+    ? parseInputNumber(row.querySelector('input[name^="uni_"]')?.value)
+    : Number(row.dataset.cajones || 0);
 
   const sinCarga = (cargadoCaj === null || cargadoCaj === 0);
 
-  // 🚫 IMPORTANTE: NO auto-F en carga inicial
   if (!esInicial && sinCarga && esperado <= 0.4){
     box.classList.add("active");
     box.textContent = "F";
-    registrarCambioFila(row);
     return;
   }
 
   if (cargadoCaj === null){
     box.classList.remove("active");
     box.textContent = "";
-    if (!esInicial) registrarCambioFila(row);
     return;
   }
 
@@ -787,22 +786,40 @@ function actualizarFaltanteRow(row, esInicial = false){
     box.classList.remove("active");
     box.textContent = "";
   }
-
-  if (!esInicial) registrarCambioFila(row);
 }
 
 function activarLogicaFaltante(){
   resultEl.querySelectorAll("tbody tr").forEach(row => {
-    const inputCaj = row.querySelector(".input-caj");
+    const trigger = row.querySelector('[data-caj-trigger]');
     const box = row.querySelector(".faltante-box");
 
-    if (inputCaj){
-      inputCaj.addEventListener("input", () => {
-        inputCaj.value = inputCaj.value.replace(/[^\d]/g, "");
-        actualizarFaltanteRow(row, true);
-        registrarCambioFila(row);
+    if (trigger){
+      trigger.addEventListener("click", () => {
+        const idx = Number(row.dataset.filaIdx);
+        const item = filasFiltradas[idx];
+        if (!item) return;
+        const bufKey = `${item.tallerista}__${item.sector || ""}__${item.descripcion}`;
+        const bufItem = getBuffer().find(b => `${b.tallerista}__${b.sector || ""}__${b.descripcion}` === bufKey);
+        const initial = (bufItem && bufItem.cajonesSel) || {};
+        cajonesPopup.open({
+          titulo: `Cajones — ${item.descripcionDisplay || item.descripcion}`,
+          initial: initial,
+          onConfirm: (sel, totalCaj, pesoTotal) => {
+            // Persistir en row + buffer
+            row.dataset.cajones = totalCaj;
+            row.dataset.pesoCajones = pesoTotal;
+            if (totalCaj > 0){
+              trigger.classList.add("has-sel");
+              trigger.innerHTML = `${totalCaj} caj<span class="sub">${pesoTotal.toLocaleString('es-AR',{maximumFractionDigits:2})} kg</span>`;
+            } else {
+              trigger.classList.remove("has-sel");
+              trigger.innerHTML = '📦 Cargar';
+            }
+            actualizarFaltanteRow(row, true);
+            registrarCambioFila(row, sel, totalCaj, pesoTotal);
+          }
+        });
       });
-      inputCaj.addEventListener("change", () => actualizarFaltanteRow(row));
     }
 
     const inputUni = row.querySelector(".input-uni");
@@ -1094,12 +1111,18 @@ function renderizarFilasFase1(filtro){
     }
     const bufKey = `${item.tallerista}__${item.sector || ""}__${item.descripcion}`;
     const bufItem = getBuffer().find(b => `${b.tallerista}__${b.sector || ""}__${b.descripcion}` === bufKey);
-    const bufCajVal = bufItem ? bufItem.cajones : "";
+    const bufCajVal = bufItem ? Number(bufItem.cajones) : 0;
     const bufUniVal = bufItem ? (bufItem.unidades || "") : "";
+    const bufPesoCaj = bufItem ? Number(bufItem.pesoCajones || 0) : 0;
+
+    const triggerCls = bufCajVal > 0 ? 'cajpop-trigger has-sel' : 'cajpop-trigger';
+    const triggerLabel = bufCajVal > 0
+      ? `${bufCajVal} caj<span class="sub">${bufPesoCaj.toLocaleString('es-AR',{maximumFractionDigits:2})} kg</span>`
+      : '📦 Cargar';
 
     const cajCell = item.esCarton
       ? `<td class="right"><span class="zero">—</span></td>`
-      : `<td class="right"><input type="text" inputmode="numeric" class="cell-input cell-input-small input-caj" placeholder="0" name="caj_${index}" value="${bufCajVal}" autocomplete="off"></td>`;
+      : `<td class="right"><button type="button" class="${triggerCls}" data-caj-trigger data-fila-idx-trigger="${index}">${triggerLabel}</button></td>`;
 
     const uniCell = item.esCarton
       ? `<td class="right"><input type="text" inputmode="numeric" class="cell-input cell-input-small input-uni" placeholder="0" name="uni_${index}" value="${bufUniVal}" autocomplete="off"></td>`
@@ -1110,6 +1133,8 @@ function renderizarFilasFase1(filtro){
         data-fila-idx="${index}"
         data-cajones-esperados="${Number(item.cajonesEnviar)}"
         data-es-carton="${item.esCarton ? "1" : "0"}"
+        data-cajones="${bufCajVal}"
+        data-peso-cajones="${bufPesoCaj}"
       >
         <td>${item.sector ? escapeHtml(item.sector) : '<span class="zero">Sin sector</span>'}</td>
         <td class="descripcion-cell">${escapeHtml(item.descripcionDisplay || item.descripcion)}</td>
@@ -1627,7 +1652,7 @@ btnImprimir.addEventListener("click", () => {
   setTimeout(() => ventana.print(), 300);
 });
 
-function registrarCambioFila(row){
+function registrarCambioFila(row, selPopup, totalCajPopup, pesoTotalPopup){
   const idx = Number(row.dataset.filaIdx);
   const item = filasFiltradas[idx];
   if (!item) return;
@@ -1638,11 +1663,14 @@ function registrarCambioFila(row){
   const descripcionDisplay = item.descripcionDisplay || descripcion;
   const esCarton = item.esCarton;
 
-  const inputCaj = row.querySelector('input[name^="caj_"]');
   const inputUni = row.querySelector('input[name^="uni_"]');
   const faltanteBox = row.querySelector(".faltante-box");
 
-  const cajEnviar = parseInputNumber(inputCaj?.value);
+  // Cajones: popup (no-cartones) o input vacío (cartones — siempre 0 cajones)
+  const cajEnviar = esCarton ? 0 : (totalCajPopup !== undefined ? totalCajPopup : Number(row.dataset.cajones || 0));
+  const pesoCajones = totalCajPopup !== undefined ? pesoTotalPopup : Number(row.dataset.pesoCajones || 0);
+  const cajonesSel = selPopup !== undefined ? selPopup : null;
+
   const uniEnviar = parseInputNumber(inputUni?.value);
   const faltante = !!faltanteBox?.classList.contains("active");
 
@@ -1652,6 +1680,12 @@ function registrarCambioFila(row){
     faltante === true;
 
   if (hayCambios){
+    const buf = getBuffer();
+    const key = `${tallerista}__${sector}__${descripcion}`;
+    const bufIdx = buf.findIndex(b => `${b.tallerista}__${b.sector}__${b.descripcion}` === key);
+    // Preservar cajonesSel/pesoCajones del buffer si el cambio vino del F/uni (no del popup)
+    const prevSel = (bufIdx >= 0 && cajonesSel === null) ? (buf[bufIdx].cajonesSel || null) : cajonesSel;
+    const prevPeso = (bufIdx >= 0 && totalCajPopup === undefined) ? Number(buf[bufIdx].pesoCajones || 0) : pesoCajones;
     addToBuffer({
       tallerista,
       sector,
@@ -1661,16 +1695,17 @@ function registrarCambioFila(row){
       unidades: uniEnviar ?? 0,
       faltante,
       esCarton,
+      cajonesSel: prevSel,
+      pesoCajones: prevPeso,
       kg: "",
       timestamp: Date.now()
     });
   } else {
-    // Quitar del buffer si se vació
     const buf = getBuffer();
     const key = `${tallerista}__${sector}__${descripcion}`;
-    const idx = buf.findIndex(b => `${b.tallerista}__${b.sector}__${b.descripcion}` === key);
-    if (idx >= 0){
-      buf.splice(idx, 1);
+    const bufIdx = buf.findIndex(b => `${b.tallerista}__${b.sector}__${b.descripcion}` === key);
+    if (bufIdx >= 0){
+      buf.splice(bufIdx, 1);
       saveBuffer(buf);
     }
   }
