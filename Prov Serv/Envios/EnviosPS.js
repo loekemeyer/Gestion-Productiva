@@ -42,7 +42,9 @@ let fetchedItems = [];
 let availablePS = [];
 let isSubmitting = false;
 let cargaPorUnidades = false; // true cuando PS seleccionado tiene flag carga_por_unidades=TRUE (ej. AJ Adhesivos)
-let cargaPorUniMap = new Map(); // ps -> boolean, se llena al cargar la lista de PS
+let sinCajones = false; // true cuando PS seleccionado tiene flag sin_cajones=TRUE (ej. Charcas, AJ Adhesivos)
+let cargaPorUniMap = new Map(); // ps -> boolean
+let sinCajonesMap = new Map(); // ps -> boolean
 
 function getBuffer() {
   try {
@@ -441,9 +443,10 @@ async function getPSDisponibles() {
   if (error) throw error;
   // Cargar flags carga_por_unidades de Tall_ProvAT_PS en paralelo
   try {
-    const { data: flagsData } = await sb.from("Tall_ProvAT_PS").select("nombre, carga_por_unidades");
+    const { data: flagsData } = await sb.from("Tall_ProvAT_PS").select("nombre, carga_por_unidades, sin_cajones");
     if (flagsData) {
       cargaPorUniMap = new Map(flagsData.map(r => [String(r.nombre || "").trim(), Boolean(r.carga_por_unidades)]));
+      sinCajonesMap = new Map(flagsData.map(r => [String(r.nombre || "").trim(), Boolean(r.sin_cajones)]));
     }
   } catch (e) {
     console.warn("No se pudo cargar carga_por_unidades flags:", e);
@@ -498,10 +501,14 @@ function mostrarFase(n) {
 
 function actualizarBtnSiguiente() {
   const buf = getBuffer();
-  const tieneItems = buf.some(b => b.ps === selectedPS && Number(b.cajones) > 0);
+  const tieneItems = buf.some(b => b.ps === selectedPS && (
+    Number(b.cajones) > 0 || Number(b.unidades) > 0 || parseDecimal(b.kg) > 0
+  ));
   btnSiguiente.disabled = !tieneItems;
   btnSiguiente.classList.toggle("disabled", !tieneItems);
   btnSiguiente.classList.remove("hidden");
+  // Si sinCajones: el botón actúa como Enviar directo (no hay Fase 2)
+  btnSiguiente.textContent = sinCajones ? "Enviar" : "Siguiente →";
 }
 
 function renderPSButtons(values) {
@@ -522,6 +529,7 @@ function renderPSButtons(values) {
 async function seleccionarPS(ps) {
   selectedPS = ps;
   cargaPorUnidades = Boolean(cargaPorUniMap.get(ps));
+  sinCajones = Boolean(sinCajonesMap.get(ps));
   isSubmitting = true;
   statusEl.textContent = "Buscando partes...";
 
@@ -569,10 +577,21 @@ function renderizarFase1() {
 
     const rowClass = (mv && mv.maxCajCerv === 0) ? "row-max-zero" : "";
 
-    const triggerCls = bufCajVal > 0 ? 'cajpop-trigger has-sel' : 'cajpop-trigger';
-    const triggerLabel = bufCajVal > 0
-      ? `${bufCajVal} caj<span class="sub">${bufPesoCaj.toLocaleString('es-AR',{maximumFractionDigits:2})} kg</span>`
-      : '📦 Cargar';
+    let cajCellHtml;
+    if (sinCajones) {
+      // Charcas (kg) / AJ Adhesivos (uni): input directo en Fase 1
+      const placeholder = cargaPorUnidades ? '0' : '0,0';
+      const imode = cargaPorUnidades ? 'numeric' : 'decimal';
+      const valStored = bufItem ? (cargaPorUnidades ? (bufItem.unidades || '') : (bufItem.kg || '')) : '';
+      const labelTipo = cargaPorUnidades ? 'uni' : 'kg';
+      cajCellHtml = `<input type="text" inputmode="${imode}" class="cell-input input-directo" data-tipo="${labelTipo}" placeholder="${placeholder}" value="${valStored}" autocomplete="off" style="width:80px">`;
+    } else {
+      const triggerCls = bufCajVal > 0 ? 'cajpop-trigger has-sel' : 'cajpop-trigger';
+      const triggerLabel = bufCajVal > 0
+        ? `${bufCajVal} caj<span class="sub">${bufPesoCaj.toLocaleString('es-AR',{maximumFractionDigits:2})} kg</span>`
+        : '📦 Cargar';
+      cajCellHtml = `<button type="button" class="${triggerCls}" data-action="popup-cajones">${triggerLabel}</button>`;
+    }
 
     return `
       <tr class="${rowClass}" data-idx="${i}" data-sug="${sug ?? ""}" data-sp="${escapeHtml(item.sp)}" data-parte="${escapeHtml(item.parte)}" data-cajones="${bufCajVal}" data-peso-cajones="${bufPesoCaj}">
@@ -588,9 +607,7 @@ function renderizarFase1() {
         </td>
         <td class="right sug-cell"><b>${sugTxt}</b></td>
         <td>${escapeHtml(item.sc)}</td>
-        <td class="right">
-          <button type="button" class="${triggerCls}" data-action="popup-cajones">${triggerLabel}</button>
-        </td>
+        <td class="right">${cajCellHtml}</td>
         <td class="center"><div class="${faltClass}">${faltTxt}</div></td>
       </tr>
     `;
@@ -599,6 +616,17 @@ function renderizarFase1() {
   fase1TableBody.querySelectorAll("tr").forEach((row, idx) => {
     const box = row.querySelector(".faltante-box");
     const trigger = row.querySelector('[data-action="popup-cajones"]');
+    const inputDirecto = row.querySelector(".input-directo");
+
+    if (inputDirecto) {
+      inputDirecto.addEventListener("input", () => {
+        const tipo = inputDirecto.dataset.tipo;
+        if (tipo === 'uni') inputDirecto.value = inputDirecto.value.replace(/\D/g,"");
+        else inputDirecto.value = inputDirecto.value.replace(/[^0-9,.\-]/g,"");
+        registrarCambioFila1Directo(idx);
+      });
+      inputDirecto.addEventListener("change", () => registrarCambioFila1Directo(idx));
+    }
 
     if (trigger) {
       trigger.addEventListener("click", () => {
@@ -739,6 +767,43 @@ function actualizarRowConCajones(idx, sel, totalCaj, pesoTotal) {
   saveBuffer(buf);
 }
 
+// Para PSs sin_cajones (Charcas, AJ Adhesivos) — guardar valor directo (kg o unidades)
+// directamente desde Fase 1. Saltea popup y Fase 2.
+function registrarCambioFila1Directo(idx) {
+  const item = fetchedItems[idx];
+  if (!item) return;
+  const rows = fase1TableBody.querySelectorAll("tr");
+  const row = rows[idx];
+  const input = row?.querySelector(".input-directo");
+  if (!input) return;
+  const raw = input.value.trim();
+  const num = parseDecimal(raw);
+  const buf = getBuffer();
+  const bufKey = `${selectedPS}__${item.sc}__${item.parte}`;
+  const bufIdx = buf.findIndex(b => `${b.ps}__${b.sc}__${b.parte}` === bufKey);
+  if (num > 0) {
+    const newItem = {
+      ps: selectedPS,
+      parte: item.parte,
+      proceso: item.proceso,
+      sc: item.sc,
+      sp: item.sp,
+      cajones: 0,
+      cajonesSel: {},
+      pesoCajones: 0,
+      faltante: false,
+      kg: cargaPorUnidades ? "" : String(num),
+      unidades: cargaPorUnidades ? num : 0,
+      modoDirecto: true
+    };
+    if (bufIdx >= 0) buf[bufIdx] = newItem;
+    else buf.push(newItem);
+  } else {
+    if (bufIdx >= 0) buf.splice(bufIdx, 1);
+  }
+  saveBuffer(buf);
+}
+
 // Solo se usa para refrescar el flag faltante en el buffer cuando el operador toca el F box.
 // Las cajones se persisten via actualizarRowConCajones (popup confirm).
 function registrarCambioFila1(idx) {
@@ -836,13 +901,20 @@ function validarFase2Completa() {
 
 btnSiguiente.addEventListener("click", () => {
   const buf = getBuffer();
-  const itemsPS = buf.filter(b => b.ps === selectedPS && Number(b.cajones) > 0);
+  const itemsPS = buf.filter(b => b.ps === selectedPS && (
+    Number(b.cajones) > 0 || Number(b.unidades) > 0 || parseDecimal(b.kg) > 0
+  ));
   if (!itemsPS.length) {
-    alert("Selecciona al menos un artículo con cajones para enviar");
+    alert("Cargá al menos un artículo");
     return;
   }
-  renderizarFase2();
-  mostrarFase(2);
+  if (sinCajones) {
+    // PS sin cajones (Charcas/AJ): el valor ya está en Fase 1, enviar directo
+    btnEnviar.click();
+  } else {
+    renderizarFase2();
+    mostrarFase(2);
+  }
 });
 
 btnVolverFase1.addEventListener("click", () => {
@@ -872,13 +944,18 @@ btnEnviar.addEventListener("click", async () => {
   }
 
   const buf = getBuffer();
-  const itemsConCaj = buf.filter(b => b.ps === selectedPS && Number(b.cajones) > 0);
+  const itemsConCaj = buf.filter(b => b.ps === selectedPS && (
+    Number(b.cajones) > 0 || Number(b.unidades) > 0 || parseDecimal(b.kg) > 0
+  ));
 
-  const faltanKg = itemsConCaj.filter(b => !(parseDecimal(b.kg) > 0));
-  if (faltanKg.length) {
-    const etiqueta = cargaPorUnidades ? "Unidades" : "Kg";
-    alert("Por favor ingresa " + etiqueta + " para todos los artículos");
-    return;
+  // Para PSs con cajones (no sinCajones): validar que tengan kg/uni cargado en Fase 2
+  if (!sinCajones) {
+    const faltanKg = itemsConCaj.filter(b => !(parseDecimal(b.kg) > 0 || Number(b.unidades) > 0));
+    if (faltanKg.length) {
+      const etiqueta = cargaPorUnidades ? "Unidades" : "Kg";
+      alert("Por favor ingresa " + etiqueta + " para todos los artículos");
+      return;
+    }
   }
 
   btnEnviar.disabled = true;

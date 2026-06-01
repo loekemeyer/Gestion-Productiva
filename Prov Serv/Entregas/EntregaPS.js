@@ -26,6 +26,25 @@ function formatNumKgEnt(n) {
 const cajonesSelByIdx = {};
 const pesoCajByIdx = {};
 
+// Flags por PS (carga_por_unidades, sin_cajones)
+let psFlagsMap = new Map(); // ps -> { cargaPorUnidades, sinCajones }
+
+async function cargarPSFlags() {
+  try {
+    const { data } = await sb.from("Tall_ProvAT_PS").select("nombre, carga_por_unidades, sin_cajones");
+    if (data) {
+      psFlagsMap = new Map(data.map(r => [
+        String(r.nombre || "").trim(),
+        { cargaPorUnidades: Boolean(r.carga_por_unidades), sinCajones: Boolean(r.sin_cajones) }
+      ]));
+    }
+  } catch (e) { console.warn("[EntregaPS] cargarPSFlags fallo:", e); }
+}
+
+function getPSFlags(ps) {
+  return psFlagsMap.get(ps) || { cargaPorUnidades: false, sinCajones: false };
+}
+
 /***********************
  * DOM
  ***********************/
@@ -208,29 +227,35 @@ function renderTable(items) {
     return;
   }
 
+  const flags = getPSFlags(selectedPS);
+  const isUni = flags.cargaPorUnidades;
+  const isSinCaj = flags.sinCajones;
+
   const rows = items.map((item, i) => {
+    let cajCell, brutoCell, netoCell;
+    if (isSinCaj) {
+      // Charcas (kg) / AJ (uni): NO cajones, input directo
+      const placeholder = isUni ? '0' : '0,0';
+      const imode = isUni ? 'numeric' : 'decimal';
+      const label = isUni ? 'uni' : 'kg';
+      cajCell = `<td><span class="zero">—</span></td>`;
+      brutoCell = `<td><input class="input-kg" type="text" inputmode="${imode}" placeholder="${placeholder}" data-role="directo-${label}" data-idx="${i}"/></td>`;
+      netoCell = `<td><span class="zero">—</span></td>`;
+    } else {
+      // Resto: popup cajones + kg bruto/neto
+      cajCell = `<td><button type="button" class="cajpop-trigger" data-caj-trigger data-idx="${i}">📦 Cargar</button></td>`;
+      brutoCell = `<td><input class="input-kg" type="text" inputmode="decimal" placeholder="0,0" data-role="kg-bruto" data-idx="${i}"/></td>`;
+      netoCell = `<td><span class="kg-neto-cell" data-role="kg-neto" data-idx="${i}">—</span></td>`;
+    }
     return `
       <tr data-idx="${i}" data-cajones="0" data-peso-cajones="0">
         <td>${escapeHtml(item.parte)}</td>
         <td>${escapeHtml(item.proceso)}</td>
         <td>${escapeHtml(item.sc)}</td>
         <td>${escapeHtml(item.sp)}</td>
-        <td>
-          <button type="button" class="cajpop-trigger" data-caj-trigger data-idx="${i}">📦 Cargar</button>
-        </td>
-        <td>
-          <input
-            class="input-kg"
-            type="text"
-            inputmode="decimal"
-            placeholder="0,0"
-            data-role="kg-bruto"
-            data-idx="${i}"
-          />
-        </td>
-        <td>
-          <span class="kg-neto-cell" data-role="kg-neto" data-idx="${i}">—</span>
-        </td>
+        ${cajCell}
+        ${brutoCell}
+        ${netoCell}
       </tr>
     `;
   }).join("");
@@ -274,6 +299,17 @@ function renderTable(items) {
         .replace(/(,.*),/g, '$1');
       const i = Number(input.dataset.idx);
       recalcKgNetoRow(i);
+      updateEnviarState();
+    });
+  });
+
+  // Inputs directos (sin_cajones): Kg para Charcas, Uni para AJ
+  resultBody.querySelectorAll('input[data-role^="directo-"]').forEach(input => {
+    input.addEventListener("input", () => {
+      const isUni = input.dataset.role === 'directo-uni';
+      input.value = isUni
+        ? input.value.replace(/\D/g, "")
+        : input.value.replace(/[^0-9,]/g, "").replace(/(,.*),/g, '$1');
       updateEnviarState();
     });
   });
@@ -372,15 +408,31 @@ async function seleccionarPS(ps) {
  * TABLE DATA
  ***********************/
 function getItemsFromTable() {
+  const flags = getPSFlags(selectedPS);
   return fetchedItems.map((item, i) => {
+    if (flags.sinCajones) {
+      // Modo directo: leer del input directo (kg o uni)
+      const inputDir = resultBody.querySelector(`input[data-role^="directo-"][data-idx="${i}"]`);
+      const raw = String(inputDir?.value || "").trim().replace(",", ".");
+      const n = parseFloat(raw) || 0;
+      return {
+        ps: item.ps,
+        proceso: item.proceso,
+        parte: item.parte,
+        sc: item.sc,
+        sp: item.sp,
+        cajones: "0",
+        kg: flags.cargaPorUnidades ? "" : (n > 0 ? String(n) : ""),
+        unidades: flags.cargaPorUnidades ? n : 0,
+        _modoDirecto: true
+      };
+    }
     const row = resultBody.querySelector(`tr[data-idx="${i}"]`);
     const cajones = String(row?.dataset.cajones || "0").trim();
     const pesoCaj = Number(row?.dataset.pesoCajones || 0);
-
     const brutoInput = resultBody.querySelector(`input[data-role="kg-bruto"][data-idx="${i}"]`);
     const bruto = parseFloat(String(brutoInput?.value || "0").replace(",", ".")) || 0;
     const kgNeto = Math.max(0, bruto - pesoCaj);
-
     return {
       ps: item.ps,
       proceso: item.proceso,
@@ -388,13 +440,17 @@ function getItemsFromTable() {
       sc: item.sc,
       sp: item.sp,
       cajones,
-      kg: kgNeto > 0 ? String(kgNeto) : ""
+      kg: kgNeto > 0 ? String(kgNeto) : "",
+      unidades: 0
     };
   });
 }
 
 function filterItemsToSend(items) {
   return items.filter(it => {
+    if (it._modoDirecto) {
+      return (parseFloat(it.kg) > 0) || (Number(it.unidades) > 0);
+    }
     const n = Number(it.cajones);
     return it.cajones !== "" && Number.isInteger(n) && n > 0;
   });
@@ -455,17 +511,21 @@ btnEnviarCambios.addEventListener("click", async () => {
 
     setStatus("Enviando...", "");
 
-    const rows = items.map(it => ({
-      "Dia-mes": arDateISO(),
-      "Prov_Serv": selectedPS,
-      "Sector SC": it.sc,
-      "Parte": it.parte,
-      "KG": it.kg ? parseFloat(it.kg) : null,
-      "Cajones": parseInt(it.cajones),
-      "Sector SP": it.sp,
-      "Proceso": it.proceso,
-      "Faltante": false
-    }));
+    const rows = items.map(it => {
+      const base = {
+        "Dia-mes": arDateISO(),
+        "Prov_Serv": selectedPS,
+        "Sector SC": it.sc,
+        "Parte": it.parte,
+        "KG": it.kg ? parseFloat(it.kg) : null,
+        "Cajones": parseInt(it.cajones) || 0,
+        "Sector SP": it.sp,
+        "Proceso": it.proceso,
+        "Faltante": false
+      };
+      if (Number(it.unidades) > 0) base["Unidades"] = Number(it.unidades);
+      return base;
+    });
 
     const { error } = await sb
       .from("Entregas PS")
@@ -492,6 +552,7 @@ btnEnviarCambios.addEventListener("click", async () => {
 async function init() {
   try {
     setStatus("Cargando proveedores...", "");
+    await cargarPSFlags();
     availablePS = await getPSDisponibles();
 
     renderPSButtons(availablePS);
