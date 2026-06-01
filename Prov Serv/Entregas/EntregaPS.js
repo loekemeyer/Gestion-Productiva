@@ -16,6 +16,15 @@ const COL_SC = "SC";
 const COL_SP = "SP";
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+window.__sbClient__ = sb; // expuesto para cajones-popup.js
+
+function formatNumKgEnt(n) {
+  return Number(n || 0).toLocaleString('es-AR', { minimumFractionDigits: 0, maximumFractionDigits: 3 });
+}
+
+// Selecciones de cajones por idx — persistencia en memoria de esta vista
+const cajonesSelByIdx = {};
+const pesoCajByIdx = {};
 
 /***********************
  * DOM
@@ -191,7 +200,7 @@ function renderTable(items) {
   if (!items.length) {
     resultBody.innerHTML = `
       <tr>
-        <td colspan="5" style="text-align:center;color:#b42318;font-weight:700;">
+        <td colspan="7" style="text-align:center;color:#b42318;font-weight:700;">
           No hay partes para este proveedor.
         </td>
       </tr>
@@ -201,53 +210,83 @@ function renderTable(items) {
 
   const rows = items.map((item, i) => {
     return `
-      <tr data-idx="${i}">
+      <tr data-idx="${i}" data-cajones="0" data-peso-cajones="0">
         <td>${escapeHtml(item.parte)}</td>
         <td>${escapeHtml(item.proceso)}</td>
         <td>${escapeHtml(item.sc)}</td>
         <td>${escapeHtml(item.sp)}</td>
         <td>
-  <input
-    class="input-kg"
-    type="text"
-    inputmode="decimal"
-    placeholder="0,0"
-    data-role="kg"
-    data-idx="${i}"
-  />
-</td>
-
-<td>
-  <input
-    class="input-caj"
-    type="text"
-    inputmode="numeric"
-    placeholder="0"
-    data-role="cajones"
-    data-idx="${i}"
-  />
-</td>
+          <button type="button" class="cajpop-trigger" data-caj-trigger data-idx="${i}">📦 Cargar</button>
+        </td>
+        <td>
+          <input
+            class="input-kg"
+            type="text"
+            inputmode="decimal"
+            placeholder="0,0"
+            data-role="kg-bruto"
+            data-idx="${i}"
+          />
+        </td>
+        <td>
+          <span class="kg-neto-cell" data-role="kg-neto" data-idx="${i}">—</span>
+        </td>
       </tr>
     `;
   }).join("");
 
   resultBody.innerHTML = rows;
 
-  resultBody.querySelectorAll('input[data-role="cajones"]').forEach(input => {
+  // Trigger del popup
+  resultBody.querySelectorAll('[data-caj-trigger]').forEach(btn => {
+    btn.addEventListener("click", () => {
+      const i = Number(btn.dataset.idx);
+      const item = fetchedItems[i];
+      cajonesPopup.open({
+        titulo: `Cajones — ${item.parte}`,
+        initial: cajonesSelByIdx[i] || {},
+        onConfirm: (sel, totalCaj, pesoTotal) => {
+          cajonesSelByIdx[i] = sel;
+          pesoCajByIdx[i] = pesoTotal;
+          const row = btn.closest("tr");
+          row.dataset.cajones = totalCaj;
+          row.dataset.pesoCajones = pesoTotal;
+          if (totalCaj > 0) {
+            btn.classList.add("has-sel");
+            btn.innerHTML = `${totalCaj} caj<span class="sub">${pesoTotal.toLocaleString('es-AR',{maximumFractionDigits:2})} kg</span>`;
+          } else {
+            btn.classList.remove("has-sel");
+            btn.innerHTML = '📦 Cargar';
+          }
+          // Recalcular neto si ya hay bruto
+          recalcKgNetoRow(i);
+          updateEnviarState();
+        }
+      });
+    });
+  });
+
+  // Kg Bruto → permite coma y decimal, recalcula neto
+  resultBody.querySelectorAll('input[data-role="kg-bruto"]').forEach(input => {
     input.addEventListener("input", () => {
-      input.value = input.value.replace(/\D/g, "");
+      input.value = input.value
+        .replace(/[^0-9,]/g, "")
+        .replace(/(,.*),/g, '$1');
+      const i = Number(input.dataset.idx);
+      recalcKgNetoRow(i);
       updateEnviarState();
     });
   });
-  // KG → permite coma y decimal
-resultBody.querySelectorAll('input[data-role="kg"]').forEach(input => {
-  input.addEventListener("input", () => {
-    input.value = input.value
-      .replace(/[^0-9,]/g, "")   // solo números y coma
-      .replace(/(,.*),/g, '$1'); // solo una coma
-    updateEnviarState();
-  });
-});
+}
+
+function recalcKgNetoRow(i) {
+  const brutoInput = resultBody.querySelector(`input[data-role="kg-bruto"][data-idx="${i}"]`);
+  const netoSpan = resultBody.querySelector(`[data-role="kg-neto"][data-idx="${i}"]`);
+  if (!brutoInput || !netoSpan) return;
+  const bruto = parseFloat(String(brutoInput.value || "0").replace(",", ".")) || 0;
+  const pesoCaj = Number(pesoCajByIdx[i] || 0);
+  const neto = Math.max(0, bruto - pesoCaj);
+  netoSpan.textContent = neto ? formatNumKgEnt(neto) : '—';
 }
 
 function showSelectionView() {
@@ -334,11 +373,13 @@ async function seleccionarPS(ps) {
  ***********************/
 function getItemsFromTable() {
   return fetchedItems.map((item, i) => {
-    const input = resultBody.querySelector(`input[data-role="cajones"][data-idx="${i}"]`);
-    const cajones = String(input?.value || "").trim();
+    const row = resultBody.querySelector(`tr[data-idx="${i}"]`);
+    const cajones = String(row?.dataset.cajones || "0").trim();
+    const pesoCaj = Number(row?.dataset.pesoCajones || 0);
 
-    const kgInput = resultBody.querySelector(`input[data-role="kg"][data-idx="${i}"]`);
-    const kg = String(kgInput?.value || "").trim().replace(",", ".");
+    const brutoInput = resultBody.querySelector(`input[data-role="kg-bruto"][data-idx="${i}"]`);
+    const bruto = parseFloat(String(brutoInput?.value || "0").replace(",", ".")) || 0;
+    const kgNeto = Math.max(0, bruto - pesoCaj);
 
     return {
       ps: item.ps,
@@ -347,7 +388,7 @@ function getItemsFromTable() {
       sc: item.sc,
       sp: item.sp,
       cajones,
-      kg
+      kg: kgNeto > 0 ? String(kgNeto) : ""
     };
   });
 }

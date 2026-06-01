@@ -6,6 +6,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Envío a Proveedores de Servicios</title>
   <link rel="stylesheet" href="EntregaPS.css" />
+  <link rel="stylesheet" href="../../cajones-popup.css?v=20260528a" />
 </head>
 <body>
 
@@ -39,15 +40,16 @@
         <table class="table">
           <thead>
             <tr class="table-title-row">
-              <th colspan="6" id="tableTitle">Proveedor</th>
+              <th colspan="7" id="tableTitle">Proveedor</th>
             </tr>
             <tr>
               <th>Parte</th>
               <th>Proceso</th>
               <th>SC</th>
               <th>SP</th>
-              <th>Kg</th>
-              <th>Caj</th>             
+              <th>Caj</th>
+              <th>Kg Bruto</th>
+              <th>Kg Neto</th>
             </tr>
           </thead>
           <tbody id="resultBody"></tbody>
@@ -76,6 +78,7 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+  <script src="../../cajones-popup.js?v=20260528a"></script>
   <script src="EntregaPS.js"></script>
 </body>
 </html>
