@@ -28,6 +28,16 @@ const selectedBar = document.getElementById("selectedBar");
 const selectedBadge = document.getElementById("selectedBadge");
 const btnVolver = document.getElementById("btnVolver");
 const btnEnviarCambios = document.getElementById("btnEnviarCambios");
+const btnEnviarCambiosTop = document.getElementById("btnEnviarCambiosTop");
+// Espejo del boton de abajo en el header. Hereda enabled/disabled del original.
+if (btnEnviarCambiosTop) {
+  btnEnviarCambiosTop.addEventListener("click", () => btnEnviarCambios.click());
+  const sync = () => {
+    btnEnviarCambiosTop.disabled = btnEnviarCambios.disabled;
+    btnEnviarCambiosTop.classList.toggle("disabled", btnEnviarCambios.disabled);
+  };
+  new MutationObserver(sync).observe(btnEnviarCambios, { attributes: true, attributeFilter: ['disabled', 'class'] });
+}
 
 const detailWrap = document.getElementById("detailWrap");
 const resultBody = document.getElementById("resultBody");

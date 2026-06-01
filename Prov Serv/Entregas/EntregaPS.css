@@ -140,19 +140,22 @@ body {
 }
 
 .table {
-  width: 100%;
-  min-width: 760px;
+  width: auto;
   border-collapse: collapse;
   background: #fff;
   border-radius: 12px;
   overflow: hidden;
+  table-layout: fixed;
 }
 
 .table thead th,
 .table tbody td {
-  border: 1px solid #111;
+  border: 1px solid #d0d0d0;
   padding: 7px 8px;
   font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .table-title-row th {
@@ -162,6 +165,7 @@ body {
   font-size: 18px;
   font-weight: 700;
   padding: 10px 12px;
+  white-space: nowrap;
 }
 
 .table thead tr:nth-child(2) th {
@@ -170,29 +174,45 @@ body {
   text-align: center;
 }
 
-.table tbody td:nth-child(1) {
-  width: 34%;
+/* Parte — 30ch para textos como "Corta Queso Alambre (Entero)" */
+.table tbody td:nth-child(1),
+.table thead tr:nth-child(2) th:nth-child(1) {
+  width: 30ch;
+  text-align: left;
 }
 
-.table tbody td:nth-child(2) {
-  width: 26%;
+/* Proceso — "Cromado", "Doblado" */
+.table tbody td:nth-child(2),
+.table thead tr:nth-child(2) th:nth-child(2) {
+  width: 8ch;
+  text-align: center;
 }
 
+/* SC — "JF12", "LF10", "Z33" */
 .table tbody td:nth-child(3),
-.table tbody td:nth-child(4) {
-  width: 12%;
+.table thead tr:nth-child(2) th:nth-child(3) {
+  width: 5ch;
   text-align: center;
 }
 
-/* Kg */
-.table tbody td:nth-child(5) {
-  width: 14%;
+/* SP — "D16A", "Z19A", "C3" */
+.table tbody td:nth-child(4),
+.table thead tr:nth-child(2) th:nth-child(4) {
+  width: 5ch;
   text-align: center;
 }
 
-/* Caj */
-.table tbody td:nth-child(6) {
-  width: 14%;
+/* Kg — input field */
+.table tbody td:nth-child(5),
+.table thead tr:nth-child(2) th:nth-child(5) {
+  width: 7ch;
+  text-align: center;
+}
+
+/* Caj — input field */
+.table tbody td:nth-child(6),
+.table thead tr:nth-child(2) th:nth-child(6) {
+  width: 6ch;
   text-align: center;
 }
 

@@ -108,12 +108,16 @@
    ← Inicio
  </button>
 <div class="card">
-  <h2 style="margin:0 0 10px">Recepción Talleristas Cervantes</h2>
-  
+  <div class="row" style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin:0 0 10px">
+    <h2 style="margin:0">Recepción Talleristas Cervantes</h2>
+    <button id="enviar" class="send" type="button" disabled>Enviar</button>
+  </div>
+
   <div class="row">
     <button id="poly" type="button">Poly</button>
     <button id="martin" type="button">Martin</button>
     <button id="carlos" type="button">Carlos</button>
+    <button id="lucho" type="button">Lucho</button>
   </div>
 
   <div class="row">
@@ -126,10 +130,6 @@
   <div class="row" style="align-items:center;gap:8px">
     <label style="font-weight:800;font-size:14px">Fecha:</label>
     <input type="date" id="fechaEnvio" style="height:38px;border-radius:10px;border:2px solid #d0d7de;padding:0 10px;font-size:14px">
-  </div>
-
-  <div class="row">
-    <button id="enviar" class="send" type="button" disabled>Enviar</button>
   </div>
 
   <div id="status" class="status bad">Seleccioná un nombre para continuar.</div>
@@ -261,15 +261,17 @@
 
   const DESC_EXTRA = {
     G3: "Cpo Sacacorcho 520 p/cromar",
-    G4: "Cpo Sacacorcho 521 p/cromar"
+    G4: "Cpo Sacacorcho 521 p/cromar",
+    JF1: "Tochos Zinc p/Rectificar"
   };
 
   // Qué artículos van a cada empresa por tallerista
   // Si la empresa tiene lista explícita → solo esos; si no tiene lista → todo menos los de la otra empresa
   const ARTICULOS_EMPRESA = {
     CARLOS: { LK: ["GRJ7","GRJ9","GRJ10"], CH: [], never: ["A10","C1","C10","A15"] }, // CH va por Virgilio
-    MARTIN: { LK: ["GRJ1","GRJ7","G3","G4","X5","Toch"], CH: [], never: ["A10","C1","C10","A15","V9","X1"] }, // CH va por Virgilio
-    POLY:   { LK: ["M6"], CH: ["M8"], never: ["M10","M9"] } // En Cervantes Poly SOLO carga las transformaciones 1:1 (M6→M10 LK / M8→M9 CH). Los demás artículos de Poly (031/034/066/108/502/512/513/550 LK; 713/836/867 CH) se reciben en Virgilio.
+    MARTIN: { LK: ["GRJ1","GRJ7","G3","G4","X5"], CH: [], never: ["A10","C1","C10","A15","V9","X1","Toch"] }, // CH va por Virgilio. Toch ya no aplica (Lucho lo reemplaza con JF1)
+    POLY:   { LK: ["M6"], CH: ["M8"], never: ["M10","M9"] }, // En Cervantes Poly SOLO carga las transformaciones 1:1 (M6→M10 LK / M8→M9 CH). Los demás artículos de Poly (031/034/066/108/502/512/513/550 LK; 713/836/867 CH) se reciben en Virgilio.
+    LUCHO:  { LK: ["JF1"], CH: [], never: [] } // Lucho devuelve JF1 (Tochos Zinc p/Rectificar) tras procesar F7
   };
 
   const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -286,7 +288,7 @@
         .eq("activo", true);
       if (error) { console.warn("[Recep Cervantes] No se pudo validar Talleristas:", error.message); return; }
       const enBD = new Set((data||[]).map(r => String(r.nombre).trim()));
-      const hardcoded = new Set(["Carlos","Martin","Poly"]);
+      const hardcoded = new Set(["Carlos","Martin","Poly","Lucho"]);
       const faltan = [...enBD].filter(n => !hardcoded.has(n));
       const sobran = [...hardcoded].filter(n => !enBD.has(n));
       if (faltan.length || sobran.length) {
@@ -358,7 +360,8 @@
     const mapaNombres = {
       POLY: "Poly",
       MARTIN: "Martin",
-      CARLOS: "Carlos"
+      CARLOS: "Carlos",
+      LUCHO: "Lucho"
     };
 
     return mapaNombres[nombre] || (nombre.charAt(0) + nombre.slice(1).toLowerCase());
@@ -444,6 +447,7 @@
     poly.classList.toggle("active", nombre === "POLY");
     martin.classList.toggle("active", nombre === "MARTIN");
     carlos.classList.toggle("active", nombre === "CARLOS");
+    lucho.classList.toggle("active", nombre === "LUCHO");
 
     lk.classList.remove("active");
     ch.classList.remove("active");
@@ -503,6 +507,7 @@
   poly.onclick = () => selectTallerista("POLY");
   martin.onclick = () => selectTallerista("MARTIN");
   carlos.onclick = () => selectTallerista("CARLOS");
+  lucho.onclick = () => selectTallerista("LUCHO");
   lk.onclick = () => selectEmpresa("LK");
   ch.onclick = () => selectEmpresa("CH");
 
@@ -1093,7 +1098,7 @@
   // Pre-carga articulos de todos los talleristas al arrancar (despues de despiece)
   async function precargarPartes(){
     await despiecePromise;
-    await Promise.all(["POLY","MARTIN","CARLOS"].map(key =>
+    await Promise.all(["POLY","MARTIN","CARLOS","LUCHO"].map(key =>
       fetchCodesForTallerista(formatName(key), key).catch(() => {})
     ));
   }

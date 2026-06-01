@@ -21,36 +21,40 @@
       <button onclick="gpHome()" class="btn-home" type="button">← Inicio</button>
       <h1>Envios por Tallerista</h1>
       <button id="btnVolver" class="btn-volver hidden" type="button">← Cambiar</button>
-      <button onclick="gpLogout()" class="btn-home" type="button" style="background:#fee2e2;border-color:#dc2626;color:#991b1b;margin-left:8px;">⎋ Cerrar sesión</button>
     </div>
     <script>
       function gpHome(){
         var r = sessionStorage.getItem('gp_role') || 'admin';
         window.location.href = (r === 'envios') ? '../../envios-only.html' : '../../Inicio/index.html';
       }
-      function gpLogout(){
-        sessionStorage.clear();
-        window.location.href = '../../login.html?logout=1';
-      }
     </script>
 
     <!-- FASE 1: SELECCIONAR CAJONES -->
     <div id="fase1" class="fase-container">
+      <div class="fase-header" style="justify-content:flex-end;margin-bottom:8px">
+        <button id="btnSiguiente" class="btn-enviar disabled" type="button" disabled>Siguiente →</button>
+      </div>
       <div id="talleristasGrid" class="talleristas-grid"></div>
       <div id="filtroArticuloWrap" class="filtro-articulo-wrap hidden">
         <input type="search" id="txtFiltroArticulo" class="filtro-articulo-input" placeholder="Buscar artículo..." autocomplete="off">
       </div>
       <div id="result"></div>
-      <div class="footer-actions">
-        <button id="btnSiguiente" class="btn-enviar hidden" type="button">Siguiente →</button>
-      </div>
     </div>
 
     <!-- FASE 2: INGRESAR KG -->
     <div id="fase2" class="fase-container hidden">
       <div class="fase-header">
         <h2>Cargar Pesos (Kg)</h2>
-        <button id="btnVolverFase1" class="btn-volver-fases" type="button">← Atrás</button>
+        <div style="display:flex;align-items:center;gap:8px">
+          <button id="btnVolverFase1" class="btn-volver-fases" type="button">← Atrás</button>
+          <button id="btnEnviar" class="btn-enviar disabled" type="button" disabled>Enviar</button>
+        </div>
+      </div>
+      <div style="padding:8px 12px;display:flex;align-items:center;gap:10px">
+        <label style="font-weight:800;font-size:14px;display:flex;align-items:center;gap:6px">
+          Fecha:
+          <input type="date" id="fechaEnvio" style="height:38px;border-radius:10px;border:2px solid #d0d7de;padding:0 10px;font-size:14px">
+        </label>
       </div>
       <div class="table-wrap">
         <table class="table">
@@ -66,13 +70,6 @@
           </thead>
           <tbody id="fase2TableBody"></tbody>
         </table>
-      </div>
-      <div class="footer-actions" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-        <label style="font-weight:800;font-size:14px;display:flex;align-items:center;gap:6px">
-          Fecha:
-          <input type="date" id="fechaEnvio" style="height:38px;border-radius:10px;border:2px solid #d0d7de;padding:0 10px;font-size:14px">
-        </label>
-        <button id="btnEnviar" class="btn-enviar disabled" type="button" disabled>Enviar</button>
       </div>
     </div>
 

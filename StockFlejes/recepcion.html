@@ -113,8 +113,9 @@
 <!-- Modal artículos -->
 <div id="overlay" class="overlay">
   <div class="modal">
-    <div class="modal-header">
-      <div class="modal-title" id="modalTitle">Artículos</div>
+    <div class="modal-header" style="display:flex;align-items:center;gap:10px">
+      <div class="modal-title" id="modalTitle" style="flex:1">Artículos</div>
+      <button id="sendModal" class="btn btn-primary">Registrar</button>
       <button class="btn btn-secondary" id="closeModal">✕</button>
     </div>
 
@@ -128,7 +129,6 @@
     <div class="hint">Completá solo las cantidades recibidas.</div>
     <div class="modal-actions">
       <button id="cancelModal" class="btn btn-secondary">Cancelar</button>
-      <button id="sendModal" class="btn btn-primary">Registrar</button>
     </div>
     <div id="modalMsg" class="status"></div>
   </div>

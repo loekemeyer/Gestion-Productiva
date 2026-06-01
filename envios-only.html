@@ -4,7 +4,7 @@
   <script src="auth-guard.js"></script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Envíos</title>
+  <title>Logística</title>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -18,17 +18,22 @@
     .card {
       background: #fff;
       border-radius: 24px;
-      padding: 48px 36px;
+      padding: 40px 32px;
       width: 100%; max-width: 460px;
       box-shadow: 0 20px 60px rgba(0,0,0,.35);
       text-align: center;
     }
     h1 {
-      font-size: 30px; font-weight: 800;
+      font-size: 26px; font-weight: 800;
       color: #0f172a; text-transform: uppercase;
-      letter-spacing: 1px; margin-bottom: 32px;
+      letter-spacing: 1px; margin-bottom: 24px;
     }
-    .btns { display: grid; gap: 16px; }
+    h2 {
+      font-size: 18px; font-weight: 700;
+      color: #64748b; text-transform: uppercase;
+      letter-spacing: 1px; margin-bottom: 20px;
+    }
+    .btns { display: grid; gap: 14px; }
     .btn {
       display: block; width: 100%;
       padding: 22px 18px;
@@ -41,29 +46,89 @@
     }
     .btn:hover { opacity: .92; }
     .btn:active { transform: scale(.985); }
-    .btn-tall { background: linear-gradient(135deg, #3b82f6, #1d4ed8); }
-    .btn-ps   { background: linear-gradient(135deg, #10b981, #059669); }
-    .btn-calc { background: linear-gradient(135deg, #f59e0b, #d97706); }
+    .btn-ps    { background: linear-gradient(135deg, #10b981, #059669); }
+    .btn-tall  { background: linear-gradient(135deg, #3b82f6, #1d4ed8); }
+    .btn-ins   { background: linear-gradient(135deg, #ef4444, #b91c1c); }
+    .btn-calc  { background: linear-gradient(135deg, #f59e0b, #d97706); }
+    .btn-mon   { background: linear-gradient(135deg, #6366f1, #4338ca); }
+    .btn-maest { background: linear-gradient(135deg, #ec4899, #be185d); }
+
+    /* Solo monitor + maestro en pantallas ≥1600px (proxy 20" — tablets/celulares quedan fuera) */
+    .only-big { display: none !important; pointer-events: none; }
+    @media (min-width: 1600px) {
+      .only-big { display: block !important; pointer-events: auto; }
+    }
+    .btn-ctrl  { background: linear-gradient(135deg, #8b5cf6, #6d28d9); }
+    .btn-env   { background: linear-gradient(135deg, #10b981, #059669); }
+    .btn-rec   { background: linear-gradient(135deg, #ef4444, #b91c1c); }
+    .back {
+      margin-top: 18px;
+      background: none; border: 1px solid #cbd5e1;
+      color: #475569; font-size: 13px; cursor: pointer;
+      text-transform: uppercase; letter-spacing: 1px; font-weight: 600;
+      padding: 10px 22px; border-radius: 12px;
+    }
+    .back:hover { background: #f1f5f9; color: #0f172a; }
     .salir {
-      margin-top: 28px;
+      margin-top: 22px;
       background: none; border: none;
-      color: #64748b; font-size: 13px; cursor: pointer;
+      color: #94a3b8; font-size: 13px; cursor: pointer;
       text-transform: uppercase; letter-spacing: 1px; font-weight: 600;
     }
-    .salir:hover { color: #0f172a; }
+    .salir:hover { color: #ef4444; }
+    .hidden { display: none !important; }
   </style>
 </head>
 <body>
   <div class="card">
-    <h1>Envíos</h1>
-    <div class="btns">
-      <a class="btn btn-tall" href="Talleristas/Envios/EnviosTall.html">Tallerista</a>
-      <a class="btn btn-ps"   href="Prov Serv/Envios/EnviosPS.html">Prov Serv</a>
-      <a class="btn btn-calc" href="calculadora.html">Calculadora</a>
+    <!-- Vista 1: principal -->
+    <div id="vMain">
+      <h1>Logística</h1>
+      <div class="btns">
+        <button class="btn btn-ps" onclick="abrir('ps')">Prov Serv</button>
+        <button class="btn btn-tall" onclick="abrir('tall')">Tall</button>
+        <a class="btn btn-ins" href="StockFlejes/recepcion.html">Recepción Insumos</a>
+        <a class="btn btn-calc" href="calculadora.html">Calculadora</a>
+        <a class="btn btn-mon only-big" href="Produccion/monitor.html">Monitor en vivo</a>
+        <a class="btn btn-maest only-big" href="Produccion/maestro.html">Maestro Producción</a>
+      </div>
+      <button class="salir" onclick="cerrarSesion()">Cerrar sesión</button>
     </div>
-    <button class="salir" onclick="cerrarSesion()">Cerrar sesión</button>
+
+    <!-- Vista 2: Prov Serv -->
+    <div id="vPS" class="hidden">
+      <h1>Prov Serv</h1>
+      <div class="btns">
+        <a class="btn btn-ctrl" href="Prov Serv/Control/ControlPS.html">Control</a>
+        <a class="btn btn-env"  href="Prov Serv/Envios/EnviosPS.html">Envío</a>
+        <a class="btn btn-rec"  href="Prov Serv/Entregas/EntregaPS.html">Recepción</a>
+      </div>
+      <button class="back" onclick="volver()">← Volver</button>
+    </div>
+
+    <!-- Vista 3: Tall -->
+    <div id="vTall" class="hidden">
+      <h1>Tall</h1>
+      <div class="btns">
+        <a class="btn btn-ctrl" href="Talleristas/Control Tall/ControlTall.html">Control</a>
+        <a class="btn btn-env"  href="Talleristas/Envios/EnviosTall.html">Envío</a>
+        <a class="btn btn-rec"  href="Talleristas/Recepcion/Recepcion Cervantes.html">Recepción</a>
+      </div>
+      <button class="back" onclick="volver()">← Volver</button>
+    </div>
   </div>
+
   <script>
+    function abrir(sec) {
+      document.getElementById('vMain').classList.add('hidden');
+      document.getElementById('vPS').classList.toggle('hidden', sec !== 'ps');
+      document.getElementById('vTall').classList.toggle('hidden', sec !== 'tall');
+    }
+    function volver() {
+      document.getElementById('vPS').classList.add('hidden');
+      document.getElementById('vTall').classList.add('hidden');
+      document.getElementById('vMain').classList.remove('hidden');
+    }
     function cerrarSesion(){
       sessionStorage.clear();
       window.location.href = 'login.html?logout=1';

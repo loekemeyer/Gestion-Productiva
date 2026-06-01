@@ -1,0 +1,85 @@
+/* Popup de selección de cajones — utility compartida */
+.cajpop-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.55);
+  z-index: 10000;
+  display: flex; align-items: center; justify-content: center;
+}
+.cajpop-overlay.hidden { display: none; }
+.cajpop-box {
+  background: #fff;
+  border-radius: 14px;
+  width: 92vw; max-width: 460px;
+  max-height: 85vh;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 12px 40px rgba(0,0,0,.3);
+}
+.cajpop-head {
+  background: #111; color: #fff;
+  padding: 14px 20px;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.cajpop-head h3 { margin: 0; font-size: 16px; }
+.cajpop-close {
+  background: transparent; border: 0; color: #fff;
+  font-size: 22px; cursor: pointer; padding: 0 6px;
+}
+.cajpop-body {
+  padding: 12px 16px;
+  overflow-y: auto;
+  flex: 1;
+}
+.cajpop-table {
+  width: 100%; border-collapse: collapse; font-size: 14px;
+}
+.cajpop-table th, .cajpop-table td {
+  padding: 8px 6px; border-bottom: 1px solid #eee; text-align: center;
+}
+.cajpop-table th { background: #f5f5f5; font-weight: 700; }
+.cajpop-table td:first-child, .cajpop-table th:first-child { text-align: left; }
+.cajpop-qty {
+  width: 70px; height: 34px;
+  text-align: center; font-size: 15px;
+  border: 1px solid #bbb; border-radius: 6px;
+  padding: 0 6px;
+}
+.cajpop-qty:focus { outline: none; border-color: #3b82f6; }
+.cajpop-foot {
+  border-top: 2px solid #e5e5e5;
+  padding: 14px 20px;
+  display: flex; flex-direction: column; gap: 10px;
+  background: #fafafa;
+}
+.cajpop-totals {
+  display: flex; justify-content: space-between; align-items: center;
+  font-weight: 700; font-size: 15px;
+}
+.cajpop-totals span { color: #111; }
+.cajpop-actions {
+  display: flex; gap: 10px; justify-content: flex-end;
+}
+.cajpop-btn {
+  padding: 10px 20px; border-radius: 8px; border: 0;
+  font-weight: 700; font-size: 14px; cursor: pointer;
+}
+.cajpop-cancel { background: #f1f5f9; color: #333; }
+.cajpop-cancel:hover { background: #e2e8f0; }
+.cajpop-ok { background: #111; color: #fff; }
+.cajpop-ok:hover { opacity: .9; }
+
+/* Botón trigger en filas (para reemplazar input Cajones) */
+.cajpop-trigger {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 70px;
+  padding: 6px 10px;
+  border: 1px solid #bbb;
+  border-radius: 6px;
+  background: #fff;
+  font-size: 13px; font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.cajpop-trigger:hover { background: #f8f8f8; border-color: #555; }
+.cajpop-trigger.has-sel { background: #e8f5ee; border-color: #16a34a; color: #15803d; }
+.cajpop-trigger .sub { font-size: 10px; color: #777; font-weight: 400; display: block; }

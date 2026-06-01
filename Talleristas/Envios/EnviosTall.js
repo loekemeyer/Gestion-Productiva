@@ -76,7 +76,9 @@ function actualizarBtnSiguiente(){
     b.tallerista === talleristaActivo &&
     (Number(b.cajones) > 0 || Number(b.unidades) > 0)
   );
-  btnSiguiente.classList.toggle("hidden", !tieneItems);
+  btnSiguiente.disabled = !tieneItems;
+  btnSiguiente.classList.toggle("disabled", !tieneItems);
+  btnSiguiente.classList.remove("hidden");
 }
 /*************************************************
  * CACHES EN MEMORIA
@@ -302,7 +304,7 @@ async function volverALista(){
   talleristaActivo = "";
   resultEl.innerHTML = "";
   btnVolver.classList.add("hidden");
-  btnSiguiente.classList.add("hidden");
+  btnSiguiente.disabled = true; btnSiguiente.classList.add("disabled");
   if (txtFiltroArticulo) { txtFiltroArticulo.value = ""; }
   if (filtroArticuloWrap) { filtroArticuloWrap.classList.add("hidden"); }
   // Asegurar que se vea fase1 (puede venir de fase2 o fase3)
@@ -889,7 +891,7 @@ async function buscar(nombreParam){
   if (!nombre) return;
 
   filasModificadas.clear();
-  btnSiguiente.classList.add("hidden");
+  btnSiguiente.disabled = true; btnSiguiente.classList.add("disabled");
   btnSiguiente.disabled = false;
   btnSiguiente.textContent = "Enviar cambios";
 
@@ -1741,7 +1743,7 @@ async function enviarCambios(volverLuego = false){
   sectoresCache = null;
 
   filasModificadas.clear();
-  btnSiguiente.classList.add("hidden");
+  btnSiguiente.disabled = true; btnSiguiente.classList.add("disabled");
   btnSiguiente.disabled = false;
   btnSiguiente.textContent = "Enviar";
 

@@ -376,7 +376,8 @@
         <table style="width:auto;max-width:100%;" id="cmTable">
           <thead>
             <tr>
-              <th style="width:60px;">Día</th>
+              <th style="width:60px;">Día Inicio</th>
+              <th style="width:60px;">Día Fin</th>
               <th style="width:110px;">Tipo</th>
               <th style="width:200px;">N Matriz</th>
               <th style="width:240px;">Descripcion</th>
@@ -420,6 +421,7 @@
 
   // Cache
   let empleadosMap = {};   // legajo -> nombre
+  let horariosMap = {};    // legajo -> { entrada, salida } (HH:MM:SS) horario del operario
   let matricesMap = {};    // N_Matriz -> { Matriz, Tiempo_Historico }
   let currentRows = [];
 
@@ -471,11 +473,15 @@
   }
 
   async function loadEmpleados() {
-    const { data } = await sb.from('Empleados').select('Legajo, Empleado, Activo').eq('Activo', 'SI');
+    const { data } = await sb.from('Empleados').select('Legajo, Empleado, Activo, hora_entrada, hora_salida').eq('Activo', 'SI');
     if (!data) return;
     data.sort((a, b) => parseInt(String(a.Legajo).replace(/\D/g, '')) - parseInt(String(b.Legajo).replace(/\D/g, '')));
     data.forEach(e => {
       empleadosMap[e.Legajo] = e.Empleado;
+      horariosMap[e.Legajo] = {
+        entrada: extractTime(e.hora_entrada) || '08:30:00',
+        salida:  extractTime(e.hora_salida)  || '17:30:00'
+      };
       const opt = document.createElement('option');
       opt.value = e.Legajo;
       opt.textContent = e.Legajo + ' - ' + e.Empleado;
@@ -713,6 +719,88 @@
     return (p[0] || 0) * 3600 + (p[1] || 0) * 60 + (p[2] || 0);
   }
 
+  function normHora(h) {
+    h = String(h || '').trim();
+    return h.length === 5 ? h + ':00' : h;
+  }
+
+  // Extrae 'YYYY-MM-DD' de un timestamp/fecha (acepta 'T' o espacio como separador)
+  function extractDateISO(ts) {
+    if (!ts) return '';
+    const s = String(ts);
+    return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0, 10) : '';
+  }
+
+  function getHorario(legajo) {
+    return horariosMap[legajo] || { entrada: '08:30:00', salida: '17:30:00' };
+  }
+
+  // Suma n días a una fecha ISO 'YYYY-MM-DD' y devuelve ISO
+  function isoAddDays(diaISO, n) {
+    const d = new Date(diaISO + 'T00:00:00');
+    d.setDate(d.getDate() + n);
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+
+  // Construye timestamptz local (Argentina UTC-03:00) para guardar en Fecha_Inicio / Fecha_Fin
+  function fechaTZ(diaISO, hora) {
+    if (!diaISO) return null;
+    return diaISO + 'T' + normHora(hora) + '-03:00';
+  }
+
+  // Feriados que NO cuentan como dia habil intermedio.
+  // 'MM-DD' = inamovible (todos los años). 'YYYY-MM-DD' = fecha puntual (ej. trasladables/Viernes Santo).
+  const FERIADOS = new Set([
+    '01-01', // Año Nuevo
+    '03-24', // Día Nacional de la Memoria
+    '04-02', // Veteranos y Caídos en Malvinas
+    '05-01', // Día del Trabajador
+    '05-25', // Revolución de Mayo
+    '06-20', // Paso a la Inmortalidad Gral. Belgrano
+    '07-09', // Día de la Independencia
+    '12-08', // Inmaculada Concepción
+    '12-25'  // Navidad
+    // Para feriados de fecha movible (Carnaval, Viernes Santo) agregar 'YYYY-MM-DD' puntual.
+  ]);
+  function esFeriado(diaISO) {
+    if (!diaISO) return false;
+    return FERIADOS.has(diaISO) || FERIADOS.has(diaISO.slice(5)); // 'YYYY-MM-DD' o 'MM-DD'
+  }
+
+  // Segundos efectivamente trabajados entre (diaIni, hIni) y (diaFin, hFin)
+  // contando SOLO el horario del operario: el dia inicio cuenta hIni->salida,
+  // el dia fin cuenta entrada->hFin, y los dias intermedios habiles (Lun-Vie, no feriado)
+  // cuentan el turno completo. No cuenta la noche, fines de semana ni feriados inamovibles.
+  function segTrabajadosMultiDia(legajo, diaIniISO, hIni, diaFinISO, hFin) {
+    const hor = getHorario(legajo);
+    const entradaSec = hhmmssToSec(hor.entrada);
+    const salidaSec  = hhmmssToSec(hor.salida);
+    const iniSec = hhmmssToSec(hIni);
+    const finSec = hhmmssToSec(hFin);
+
+    if (!diaFinISO || diaIniISO === diaFinISO) {
+      return Math.max(1, finSec - iniSec);
+    }
+
+    const d0 = new Date(diaIniISO + 'T00:00:00');
+    const d1 = new Date(diaFinISO + 'T00:00:00');
+    const nDias = Math.round((d1 - d0) / 86400000);
+    if (isNaN(nDias) || nDias < 0) return null; // dia fin anterior al inicio
+
+    const turno = Math.max(0, salidaSec - entradaSec);
+    let total = Math.max(0, salidaSec - iniSec);   // dia inicio: hIni -> salida
+    total    += Math.max(0, finSec - entradaSec);  // dia fin:    entrada -> hFin
+
+    // dias completos intermedios (solo habiles Lun-Vie, sin feriados)
+    for (let k = 1; k < nDias; k++) {
+      const d = new Date(d0.getTime() + k * 86400000);
+      const dow = d.getDay(); // 0=Dom 6=Sab
+      const isoK = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+      if (dow !== 0 && dow !== 6 && !esFeriado(isoK)) total += turno;
+    }
+    return Math.max(1, total);
+  }
+
   // ---------- EDIT ----------
   let editingRow = null;
 
@@ -739,6 +827,8 @@
     } else {
       // Cajon — editable
       modalTitle.textContent = 'Editar registro';
+      const _dFinDef = extractDateISO(editingRow.Fecha_Fin) || extractDateISO(editingRow.Fecha);
+      const _dIniDef = extractDateISO(editingRow.Fecha_Inicio) || _dFinDef;
       let matrizOpts = '';
       for (const key of Object.keys(matricesMap)) {
         const sel = String(key) === String(editingRow.Matriz) ? ' selected' : '';
@@ -749,7 +839,9 @@
         '<div class="modal-field"><label>Operario</label><input disabled value="' + esc(editingRow.Nombre_Empleado) + '" /></div>' +
         '<div class="modal-field"><label>Uni</label><input type="number" id="editUni" min="1" value="' + editingRow.Uni + '" /></div>' +
         '<div class="modal-field"><label>Matriz</label><select id="editMatriz">' + matrizOpts + '</select></div>' +
+        '<div class="modal-field"><label>Día Inicio</label><input type="date" id="editDiaIni" value="' + esc(_dIniDef) + '" /></div>' +
         '<div class="modal-field"><label>Hora Inicio (HH:MM:SS)</label><input type="text" id="editHoraIni" value="' + esc(editingRow.Hora_Inicio) + '" placeholder="HH:MM:SS" /></div>' +
+        '<div class="modal-field"><label>Día Fin</label><input type="date" id="editDiaFin" value="' + esc(_dFinDef) + '" /></div>' +
         '<div class="modal-field"><label>Hora Fin (HH:MM:SS)</label><input type="text" id="editHoraFin" value="' + esc(editingRow.Hora_Fin) + '" placeholder="HH:MM:SS" /></div>';
       btnModalSave.classList.remove('hidden');
       btnModalSave.onclick = saveEdit;
@@ -811,9 +903,18 @@
     const newMatriz = document.getElementById('editMatriz').value;
     const newHoraIni = document.getElementById('editHoraIni').value.trim();
     const newHoraFin = document.getElementById('editHoraFin').value.trim();
+    const diaIni = document.getElementById('editDiaIni').value;
+    const diaFin = document.getElementById('editDiaFin').value || diaIni;
     if (!newUni || newUni < 1) { alert('Uni debe ser >= 1'); return; }
     if (!/^\d{1,2}:\d{2}(:\d{2})?$/.test(newHoraIni) || !/^\d{1,2}:\d{2}(:\d{2})?$/.test(newHoraFin)) {
       alert('Formato de hora invalido. Usar HH:MM:SS'); return;
+    }
+    if (!diaIni) { alert('Completá Día Inicio'); return; }
+    if (diaFin < diaIni) { alert('Día Fin no puede ser anterior a Día Inicio'); return; }
+
+    const hIni = normHora(newHoraIni), hFin = normHora(newHoraFin);
+    if (diaIni === diaFin && hhmmssToSec(hFin) <= hhmmssToSec(hIni)) {
+      alert('Hora Fin debe ser mayor que Hora Inicio (mismo día)'); return;
     }
 
     btnModalSave.disabled = true;
@@ -826,21 +927,33 @@
       const tiempoProm = matrizInfo.Tiempo_Historico;
       const nombreMatriz = matrizInfo.Matriz;
 
-      // Calculate segBruto with edited hours
-      const segBruto = Math.max(1, hhmmssToSec(newHoraFin) - hhmmssToSec(newHoraIni));
+      // Segundos brutos contando el horario del operario (multi-día si corresponde)
+      const segBruto = segTrabajadosMultiDia(editingRow.Legajo, diaIni, hIni, diaFin, hFin);
+      if (segBruto == null) { alert('Rango de días inválido'); return; }
 
-      // Find TMs within the new time range
+      // TMs que caen dentro del cajón en todo el rango de días
+      const finNextISO = isoAddDays(diaFin, 1);
       const { data: tms } = await sb.from('db_n8n_espejo')
-        .select('Segundos_Tiempo_Muerto, Hora_Inicio, Hora_Fin')
+        .select('Segundos_Tiempo_Muerto, Hora_Inicio, Hora_Fin, Fecha')
         .eq('Legajo', editingRow.Legajo)
-        .eq('Dia', editingRow.Dia)
-        .eq('Mes', editingRow.Mes)
         .eq('Uni', 0)
         .is('Eliminar', null)
-        .gte('Hora_Inicio', newHoraIni)
-        .lte('Hora_Fin', newHoraFin);
+        .gte('Fecha', fechaTZ(diaIni, '00:00:00'))
+        .lt('Fecha', fechaTZ(finNextISO, '00:00:00'));
 
-      const segTM = (tms || []).reduce((s, t) => s + (t.Segundos_Tiempo_Muerto || 0), 0);
+      const iniSec = hhmmssToSec(hIni), finSec = hhmmssToSec(hFin);
+      let segTM = 0;
+      (tms || []).forEach(t => {
+        const td = extractDateISO(t.Fecha);
+        const ti = hhmmssToSec(t.Hora_Inicio), tf = hhmmssToSec(t.Hora_Fin);
+        let dentro;
+        if (diaIni === diaFin)      dentro = (ti >= iniSec && tf <= finSec);
+        else if (td === diaIni)     dentro = (ti >= iniSec);
+        else if (td === diaFin)     dentro = (tf <= finSec);
+        else                        dentro = (td > diaIni && td < diaFin); // día intermedio completo
+        if (dentro) segTM += Number(t.Segundos_Tiempo_Muerto || 0);
+      });
+
       const segNeto = Math.max(1, segBruto - segTM);
       const segHistorico = tiempoProm * newUni;
       const tiempoToma = segNeto / newUni;
@@ -850,8 +963,14 @@
         Uni: newUni,
         Matriz: newMatriz,
         Nombre_Matriz: nombreMatriz,
-        Hora_Inicio: newHoraIni,
-        Hora_Fin: newHoraFin,
+        Hora_Inicio: hIni,
+        Hora_Fin: hFin,
+        Fecha_Inicio: fechaTZ(diaIni, hIni),
+        Fecha_Fin: fechaTZ(diaFin, hFin),
+        Fecha: fechaTZ(diaFin, hFin),
+        Dia: parseInt(diaFin.slice(8, 10), 10),
+        Mes: parseInt(diaFin.slice(5, 7), 10),
+        Quincena: parseInt(diaFin.slice(8, 10), 10) > 15 ? 2 : 1,
         Segundos_Historico: segHistorico,
         Segundos_Trabajados: segNeto,
         Segundos_Tiempo_Muerto: segTM,
@@ -936,6 +1055,12 @@
       .is('Eliminar', null);
 
     for (const cajon of cajones) {
+      // Cajón multi-día: su Segundos_Trabajados se calculó con el horario del operario.
+      // No recalcular acá (solo tenemos TMs de un día) para no corromperlo.
+      if (extractDateISO(cajon.Fecha_Inicio) && extractDateISO(cajon.Fecha_Fin) &&
+          extractDateISO(cajon.Fecha_Inicio) !== extractDateISO(cajon.Fecha_Fin)) {
+        continue;
+      }
       const segBruto = hhmmssToSec(cajon.Hora_Fin) - hhmmssToSec(cajon.Hora_Inicio);
 
       // TMs within this cajon's range
@@ -1068,6 +1193,7 @@
     const tr = document.createElement('tr');
     tr.innerHTML =
       '<td><input type="number" class="cm-dia" min="1" max="31" style="height:34px;width:60px;border:1px solid #c9d1d9;border-radius:8px;padding:0 6px;font-size:13px;text-align:center;" /></td>' +
+      '<td><input type="number" class="cm-diafin" min="1" max="31" title="Dejar vacío = mismo día. Distinto = cajón que cruza días (usa horario del operario)." style="height:34px;width:60px;border:1px solid #c9d1d9;border-radius:8px;padding:0 6px;font-size:13px;text-align:center;" /></td>' +
       '<td><select class="cm-tipo" style="height:34px;border:1px solid #c9d1d9;border-radius:8px;padding:0 6px;font-size:13px;"><option value="matriz">Matriz</option><option value="tm">Tiempo Muerto</option></select></td>' +
       '<td><select class="cm-codigo" style="height:34px;border:1px solid #c9d1d9;border-radius:8px;padding:0 6px;font-size:13px;width:180px;">' + buildMatrizSelect('matriz') + '</select></td>' +
       '<td class="cm-desc" style="font-size:12px;color:#666;"></td>' +
@@ -1112,11 +1238,12 @@
     // Tipo cambia -> ajustar uni Y repoblar codigo (matriz vs tm)
     const tipo = tr.querySelector('.cm-tipo');
     const uni = tr.querySelector('.cm-uni');
+    const diafin = tr.querySelector('.cm-diafin');
     const codigoSel = tr.querySelector('.cm-codigo');
     const descSel = tr.querySelector('.cm-desc');
     tipo.addEventListener('change', () => {
-      if (tipo.value === 'tm') { uni.value = 0; uni.disabled = true; }
-      else { uni.disabled = false; }
+      if (tipo.value === 'tm') { uni.value = 0; uni.disabled = true; diafin.value = ''; diafin.disabled = true; }
+      else { uni.disabled = false; diafin.disabled = false; }
       // Repoblar codigo con opciones del tipo seleccionado
       codigoSel.innerHTML = buildMatrizSelect(tipo.value);
       descSel.textContent = '';
@@ -1136,6 +1263,8 @@
         tipo.value = 'tm';
         uni.value = 0;
         uni.disabled = true;
+        diafin.value = '';
+        diafin.disabled = true;
       } else {
         desc.textContent = '';
       }
@@ -1148,7 +1277,7 @@
     });
 
     // Limpiar marca rojo OCR cuando el user edita un campo (no toca .cm-overlap que viene de validacion en vivo)
-    tr.querySelectorAll('.cm-dia, .cm-codigo, .cm-uni, .cm-hini, .cm-hfin').forEach(el => {
+    tr.querySelectorAll('.cm-dia, .cm-diafin, .cm-codigo, .cm-uni, .cm-hini, .cm-hfin').forEach(el => {
       const clear = () => {
         if (el.style.borderColor === 'rgb(220, 38, 38)' || el.style.background === 'rgb(254, 242, 242)') {
           el.style.borderColor = '#c9d1d9';
@@ -1451,18 +1580,22 @@
     let valid = true;
     filas.forEach((tr, i) => {
       const dia = parseInt(tr.querySelector('.cm-dia').value);
+      const diaFinRaw = parseInt(tr.querySelector('.cm-diafin').value);
       const tipo = tr.querySelector('.cm-tipo').value;
       const codigo = tr.querySelector('.cm-codigo').value;
       const uni = parseInt(tr.querySelector('.cm-uni').value) || 0;
       const hIni = tr.querySelector('.cm-hini').value;
       const hFin = tr.querySelector('.cm-hfin').value;
+      // Día fin: vacío = mismo día. Solo cajones (matriz) pueden cruzar días; TM siempre 1 día.
+      const diaFin = (tipo === 'matriz' && diaFinRaw >= 1 && diaFinRaw <= 31) ? diaFinRaw : dia;
 
       if (!dia || dia < 1 || dia > 31) { alert('Fila ' + (i+1) + ': día inválido'); valid = false; return; }
+      if (diaFin < dia) { alert('Fila ' + (i+1) + ': Día Fin no puede ser anterior al Día Inicio'); valid = false; return; }
       if (!codigo) { alert('Fila ' + (i+1) + ': selecciona un codigo'); valid = false; return; }
       if (!hIni || !hFin) { alert('Fila ' + (i+1) + ': completa hora inicio y fin'); valid = false; return; }
-      if (hhmmssToSec(hFin) <= hhmmssToSec(hIni)) { alert('Fila ' + (i+1) + ': Hora Fin debe ser mayor que Hora Inicio'); valid = false; return; }
+      if (diaFin === dia && hhmmssToSec(hFin) <= hhmmssToSec(hIni)) { alert('Fila ' + (i+1) + ': Hora Fin debe ser mayor que Hora Inicio (mismo día)'); valid = false; return; }
 
-      registros.push({ dia, tipo, codigo, uni, hIni, hFin });
+      registros.push({ dia, diaFin, tipo, codigo, uni, hIni, hFin });
     });
     if (!valid) return;
 
@@ -1584,9 +1717,11 @@
       const matInfo = matricesMap[reg.codigo];
       const tProm = matInfo.Tiempo_Historico || 0;
       const nombreMat = matInfo.Matriz;
-      const secIni = hhmmssToSec(reg.hIni);
-      const secFin = hhmmssToSec(reg.hFin);
-      const segBruto = Math.max(1, secFin - secIni);
+      const diaIniISO = anio + '-' + String(mes).padStart(2,'0') + '-' + String(reg.dia).padStart(2,'0');
+      const diaFinISO = anio + '-' + String(mes).padStart(2,'0') + '-' + String(reg.diaFin).padStart(2,'0');
+      const hIniN = normHora(reg.hIni), hFinN = normHora(reg.hFin);
+      // Segundos brutos contando el horario del operario (multi-día si reg.diaFin > reg.dia)
+      const segBruto = segTrabajadosMultiDia(legajo, diaIniISO, hIniN, diaFinISO, hFinN) || 1;
       const segTM = reg._segTM || 0;
       const segTrab = Math.max(1, segBruto - segTM);
       const segHist = tProm * reg.uni;
@@ -1594,13 +1729,14 @@
       const premio = segHist > 0 ? Math.round(((-(segTrab / segHist) + 1) * 10) * 100) / 100 : 0;
 
       const row = {
-        Fecha: fechaPara(reg.dia), Legajo: legajo, Nombre_Empleado: nombreEmp,
+        Fecha: fechaPara(reg.diaFin), Legajo: legajo, Nombre_Empleado: nombreEmp,
         Matriz: reg.codigo, Nombre_Matriz: nombreMat,
-        Uni: reg.uni, Hora_Inicio: reg.hIni, Hora_Fin: reg.hFin,
+        Uni: reg.uni, Hora_Inicio: hIniN, Hora_Fin: hFinN,
+        Fecha_Inicio: fechaTZ(diaIniISO, hIniN), Fecha_Fin: fechaTZ(diaFinISO, hFinN),
         Segundos_Trabajados: segTrab, Segundos_Tiempo_Muerto: segTM,
         Segundos_Historico: segHist, Premio: premio,
         Tiempo_Toma: tiempoToma, Tiempo_Historico: tProm,
-        Anular_Tiempo: false, Dia: reg.dia, Mes: mes, Quincena: reg.dia > 15 ? 2 : 1
+        Anular_Tiempo: false, Dia: reg.diaFin, Mes: mes, Quincena: reg.diaFin > 15 ? 2 : 1
       };
       const { error } = await sb.from('db_n8n_espejo').insert(row);
       if (error) { fail++; console.error('Error matriz:', error.message); } else ok++;
@@ -1628,6 +1764,11 @@
           .or('Eliminar.is.null,Eliminar.neq.S');
 
         for (const cajon of matrizesExistentes) {
+          // No recalcular cajones multi-día (su tiempo usa el horario del operario)
+          if (extractDateISO(cajon.Fecha_Inicio) && extractDateISO(cajon.Fecha_Fin) &&
+              extractDateISO(cajon.Fecha_Inicio) !== extractDateISO(cajon.Fecha_Fin)) {
+            continue;
+          }
           const cIni = extractTime(cajon.Hora_Inicio);
           const cFin = extractTime(cajon.Hora_Fin);
           const segBruto = Math.max(1, hhmmssToSec(cFin) - hhmmssToSec(cIni));
