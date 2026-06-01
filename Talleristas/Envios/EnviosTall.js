@@ -7,6 +7,10 @@ const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 window.__sbClient__ = supabaseClient; // expuesto para cajones-popup.js
 
+function formatNumKgEt(n) {
+  return Number(n || 0).toLocaleString('es-AR', { minimumFractionDigits: 0, maximumFractionDigits: 3 });
+}
+
 /*************************************************
  * ELEMENTOS DEL DOM
  *************************************************/
@@ -1340,12 +1344,19 @@ function renderizarFase2(){
   fase2TableBody.innerHTML = itemsConCaj.map((item) => {
     const esCarton = !!item.esCarton;
     const bufIdx = item._bufIdx;
+    const pesoCaj = Number(item.pesoCajones) || 0;
+    const kgNetoStored = item.kg ? parseDecimal(item.kg) : 0;
+    const kgBruto = Number(item.kgBruto) || (kgNetoStored ? kgNetoStored + pesoCaj : 0);
+    const kgNeto = Math.max(0, kgBruto - pesoCaj);
     const cajCell = esCarton
       ? `<td class="right"><span class="zero">—</span></td>`
-      : `<td class="right"><b>${item.cajones}</b></td>`;
+      : `<td class="right"><b>${item.cajones}</b><br><span class="kg-caj-sub">${pesoCaj.toLocaleString('es-AR',{maximumFractionDigits:2})} kg</span></td>`;
     const cantCell = esCarton
       ? `<td class="right" style="font-weight:700;color:#111;">${Number(item.unidades)} <small style="color:#666;font-weight:400;">uni</small></td>`
-      : `<td class="right"><input type="text" inputmode="decimal" class="cell-input input-kg-fase2" data-buf-idx="${bufIdx}" placeholder="0,0" value="${item.kg || ""}" autocomplete="off"></td>`;
+      : `<td class="right"><input type="text" inputmode="decimal" class="cell-input input-kg-fase2" data-buf-idx="${bufIdx}" placeholder="0,0" value="${kgBruto ? formatNumKgEt(kgBruto) : ''}" autocomplete="off"></td>`;
+    const netoCell = esCarton
+      ? `<td class="right"><span class="zero">—</span></td>`
+      : `<td class="right kg-neto-cell" data-buf-idx="${bufIdx}"><b>${kgNeto ? formatNumKgEt(kgNeto) : '—'}</b></td>`;
     return `
     <tr data-buf-idx="${bufIdx}" data-es-carton="${esCarton ? '1' : '0'}">
       <td>${escapeHtml(item.tallerista)}</td>
@@ -1353,20 +1364,35 @@ function renderizarFase2(){
       <td class="descripcion-cell">${escapeHtml(item.descripcionDisplay || item.descripcion)}</td>
       ${cajCell}
       ${cantCell}
+      ${netoCell}
       <td class="center"><button type="button" class="btn-quitar-fase2" data-buf-idx="${bufIdx}">✕</button></td>
     </tr>`;
   }).join("");
 
-  // Event listeners para inputs de Kg en Fase 2
+  // Event listeners para inputs de Kg Bruto en Fase 2 (calcula Neto + persiste neto en buffer.kg)
   fase2TableBody.querySelectorAll(".input-kg-fase2").forEach(input => {
     input.addEventListener("input", () => {
       input.value = input.value.replace(/[^0-9,.\-]/g, "");
+      const idx = Number(input.dataset.bufIdx);
+      const buf = getBuffer();
+      if (buf[idx]) {
+        const bruto = parseDecimal(input.value);
+        const pesoCaj = Number(buf[idx].pesoCajones) || 0;
+        const neto = Math.max(0, bruto - pesoCaj);
+        const cell = fase2TableBody.querySelector(`.kg-neto-cell[data-buf-idx="${idx}"] b`);
+        if (cell) cell.textContent = neto ? formatNumKgEt(neto) : '—';
+      }
       validarFase2Completa();
     });
     input.addEventListener("change", () => {
       const idx = Number(input.dataset.bufIdx);
       const buf = getBuffer();
-      if (buf[idx]) buf[idx].kg = input.value.trim();
+      if (buf[idx]) {
+        const bruto = parseDecimal(input.value);
+        const pesoCaj = Number(buf[idx].pesoCajones) || 0;
+        buf[idx].kgBruto = bruto;
+        buf[idx].kg = String(Math.max(0, bruto - pesoCaj));
+      }
       localStorage.setItem(BUFFER_KEY, JSON.stringify(buf));
       validarFase2Completa();
     });

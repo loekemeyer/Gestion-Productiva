@@ -22,11 +22,9 @@
       'envios-only.html',
       // Tall
       'talleristas/envios/enviostall.html',
-      'talleristas/control tall/controltall.html',
       'talleristas/recepcion/recepcion cervantes.html',
       // Prov Serv
       'prov serv/envios/enviosps.html',
-      'prov serv/control/controlps.html',
       'prov serv/entregas/entregaps.html',
       // Recepción Insumos
       'stockflejes/recepcion.html',
