@@ -387,7 +387,7 @@
 
     await refresh();
     // Auto-refresh cada 15 segundos
-    setInterval(refresh, 15000);
+    setInterval(refresh, 60000);
     // Actualizar timers y alertas cada segundo
     setInterval(() => { updateTimers(); renderAlertas(); }, 1000);
   }
@@ -1052,7 +1052,7 @@
   };
 
   // Cargar auditoria al inicio y cada 15s en paralelo al refresh principal.
-  setInterval(cargarAuditoria, 15000);
+  setInterval(cargarAuditoria, 60000);
   cargarAuditoria();
 
   init();
