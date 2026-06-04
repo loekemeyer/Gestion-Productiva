@@ -13,7 +13,13 @@
 
   <div class="card">
 
-    <button onclick="window.location.href='../Inicio/index.html'" class="btn-home">← Volver al inicio</button>
+    <button onclick="gpHome()" class="btn-home" type="button">← Volver al inicio</button>
+    <script>
+      function gpHome(){
+        var r = sessionStorage.getItem('gp_role') || 'admin';
+        window.location.href = (r === 'envios') ? '../envios-only.html' : '../Inicio/index.html';
+      }
+    </script>
 
     <h1>Control Envíos y Entregas</h1>
 
