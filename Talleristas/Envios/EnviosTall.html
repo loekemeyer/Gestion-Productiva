@@ -12,6 +12,7 @@
   <!-- CSS -->
   <link rel="stylesheet" href="EnviosTall.css" />
   <link rel="stylesheet" href="../../cajones-popup.css?v=20260528a" />
+  <link rel="stylesheet" href="../../tandas-popup.css?v=20260604a" />
 </head>
 <body>
 
@@ -30,49 +31,21 @@
       }
     </script>
 
-    <!-- FASE 1: SELECCIONAR CAJONES -->
+    <!-- FASE 1: UNIFICADA — CAJONES + KG NETO + UNI -->
     <div id="fase1" class="fase-container">
-      <div class="fase-header" style="justify-content:flex-end;margin-bottom:8px">
-        <button id="btnSiguiente" class="btn-enviar disabled" type="button" disabled>Siguiente →</button>
+      <div class="fase-header" style="justify-content:flex-end;margin-bottom:8px;gap:10px">
+        <label style="font-weight:800;font-size:14px;display:flex;align-items:center;gap:6px">
+          Fecha:
+          <input type="date" id="fechaEnvio" style="height:38px;border-radius:10px;border:2px solid #d0d7de;padding:0 10px;font-size:14px">
+        </label>
+        <button id="btnLimpiar" class="btn-volver-fases" type="button" title="Vaciar todo lo cargado">🗑 Limpiar</button>
+        <button id="btnEnviar" class="btn-enviar disabled" type="button" disabled>Enviar</button>
       </div>
       <div id="talleristasGrid" class="talleristas-grid"></div>
       <div id="filtroArticuloWrap" class="filtro-articulo-wrap hidden">
         <input type="search" id="txtFiltroArticulo" class="filtro-articulo-input" placeholder="Buscar artículo..." autocomplete="off">
       </div>
       <div id="result"></div>
-    </div>
-
-    <!-- FASE 2: INGRESAR KG -->
-    <div id="fase2" class="fase-container hidden">
-      <div class="fase-header">
-        <h2>Cargar Pesos (Kg)</h2>
-        <div style="display:flex;align-items:center;gap:8px">
-          <button id="btnVolverFase1" class="btn-volver-fases" type="button">← Atrás</button>
-          <button id="btnEnviar" class="btn-enviar disabled" type="button" disabled>Enviar</button>
-        </div>
-      </div>
-      <div style="padding:8px 12px;display:flex;align-items:center;gap:10px">
-        <label style="font-weight:800;font-size:14px;display:flex;align-items:center;gap:6px">
-          Fecha:
-          <input type="date" id="fechaEnvio" style="height:38px;border-radius:10px;border:2px solid #d0d7de;padding:0 10px;font-size:14px">
-        </label>
-      </div>
-      <div class="table-wrap">
-        <table class="table">
-          <thead>
-            <tr>
-              <th>Tallerista</th>
-              <th>Sec</th>
-              <th>Descripción</th>
-              <th class="right">Caj</th>
-              <th class="right">Kg Bruto / Uni</th>
-              <th class="right">Kg Neto</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody id="fase2TableBody"></tbody>
-        </table>
-      </div>
     </div>
 
     <!-- FASE 3: LISTO PARA IMPRIMIR -->
@@ -115,7 +88,8 @@
 
   <!-- JS -->
   <script src="../../cajones-popup.js?v=20260528a"></script>
-  <script src="EnviosTall.js"></script>
+  <script src="../../tandas-popup.js?v=20260604a"></script>
+  <script src="EnviosTall.js?v=20260604d"></script>
 
 </body>
 </html>

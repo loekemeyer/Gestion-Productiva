@@ -1,0 +1,217 @@
+* { box-sizing: border-box; }
+
+body{
+  font-family: Arial, sans-serif;
+  background: #f5f6f8;
+  margin: 0;
+  padding: 30px;
+}
+
+.card{
+  max-width: 1400px;
+  margin: auto;
+  background: #fff;
+  border-radius: 16px;
+  padding: 22px;
+  border: 1px solid #d9dde3;
+}
+
+h1{ margin: 0 0 18px; font-size: 26px; }
+
+.btn-home{
+  min-height: 46px;
+  padding: 0 20px;
+  border-radius: 999px;
+  border: 2px solid #c9c9c9;
+  background: #fff;
+  color: #111;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  margin-bottom: 16px;
+}
+.btn-home:hover{ border-color: #8f8f8f; }
+
+/* ===== Pasos / selectores ===== */
+.step{ margin-bottom: 16px; }
+.step-label{
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  color: #555;
+  margin-bottom: 8px;
+}
+
+.btn-group{ display: flex; gap: 10px; flex-wrap: wrap; }
+
+.opt{
+  min-height: 48px;
+  padding: 0 24px;
+  border-radius: 12px;
+  border: 2px solid #c9c9c9;
+  background: #fff;
+  color: #111;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: .15s ease;
+}
+.opt:hover{ border-color: #8f8f8f; }
+.opt.active{
+  border-color: #111;
+  background: #111;
+  color: #fff;
+}
+.opt.opt-disabled{
+  opacity: 0.4;
+  cursor: not-allowed;
+  text-decoration: line-through;
+  background: #f1f5f9;
+  color: #94a3b8;
+  border-color: #cbd5e1;
+}
+.opt.opt-disabled:hover{ border-color: #cbd5e1; }
+
+.fecha-modos{ display: flex; gap: 18px; margin-bottom: 10px; }
+.radio{ font-size: 15px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+
+.fbox{ display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+.fbox label{ font-size: 14px; display: inline-flex; gap: 6px; align-items: center; }
+
+.sel-nombre{
+  height: 44px;
+  min-width: 260px;
+  max-width: 420px;
+  border: 2px solid #c9c9c9;
+  border-radius: 12px;
+  padding: 0 12px;
+  font-size: 15px;
+  background: #fff;
+  cursor: pointer;
+}
+.sel-nombre:focus{ border-color: #111; outline: none; }
+
+input[type="month"], input[type="date"]{
+  height: 42px;
+  border: 1px solid #c9d1d9;
+  border-radius: 10px;
+  padding: 0 12px;
+  font-size: 15px;
+  background: #fff;
+}
+
+.btn-generar{
+  height: 48px;
+  padding: 0 30px;
+  border-radius: 12px;
+  border: none;
+  background: #111;
+  color: #fff;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.btn-generar:hover{ background: #333; }
+
+.status{ margin: 10px 0; color: #444; font-size: 14px; }
+
+.hidden{ display: none !important; }
+
+/* ===== Reporte pivote ===== */
+.report-tools{
+  margin: 10px 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.filtro-input{
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid #94a3b8;
+  border-radius: 8px;
+  font-size: 14px;
+  min-width: 220px;
+  outline: none;
+}
+.filtro-input:focus{ border-color: #3b82f6; }
+
+.filtro-count{
+  font-size: 13px;
+  color: #475569;
+  font-weight: 600;
+}
+
+.btn-imprimir{
+  height: 42px;
+  padding: 0 18px;
+  border-radius: 10px;
+  border: 1px solid #111;
+  background: #111;
+  color: #fff;
+  font-weight: 700;
+  font-size: 14px;
+  cursor: pointer;
+}
+.btn-imprimir:hover{ background: #333; }
+
+/* printArea se reduce al ancho de la tabla (no del viewport) — así el borde derecho
+   del table-scroll queda pegado al borde derecho de la tabla, sin whitespace colgado. */
+#printArea{
+  display: inline-block;
+  vertical-align: top;
+  max-width: 100%;
+}
+
+.report-head{
+  background: #111;
+  color: #fff;
+  padding: 8px 12px;
+  font-weight: 700;
+  font-size: 14px;
+  border-radius: 8px 8px 0 0;
+}
+
+.table-scroll{
+  overflow: auto;
+  max-height: 72vh;
+  border: 1px solid #111;
+  border-top: none;
+}
+
+.pivote{
+  border-collapse: collapse;
+  width: auto;
+  border: 2.5px solid #111;
+}
+
+.pivote th, .pivote td{
+  border: 1px solid #111;
+  padding: 6px 10px;
+  font-size: 15px;
+  white-space: nowrap;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.pivote thead th{
+  background: #fff;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  font-size: 17px;
+  font-weight: 800;
+  /* Borde grueso en todos los lados — border-collapse hace que el más grueso gane */
+  border: 2.5px solid #111;
+}
+
+.pivote tbody td{ background: #fff; }
+
+/* columnas de fecha angostas (contenido tipo "05") */
+.pivote .col-fecha{ min-width: 0; }
+
+.pivote .col-total, .pivote td.total{ font-weight: 800; }
+
+.zero{ color: #999; }

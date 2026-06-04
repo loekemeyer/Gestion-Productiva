@@ -1,0 +1,136 @@
+/* Stock Online — extensión de styles.css */
+
+.head-actions{
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.stock-table{
+  border-collapse: collapse;
+  width: auto;
+  border: 2.5px solid #111;
+  margin-top: 10px;
+}
+
+.stock-table th, .stock-table td{
+  border: 1px solid #111;
+  padding: 8px 12px;
+  font-size: 17px;
+  white-space: nowrap;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.stock-table thead th{
+  background: #111;
+  color: #fff;
+  font-size: 18px;
+  font-weight: 800;
+  border: 2.5px solid #111;
+  position: sticky;
+  z-index: 3;
+}
+/* Header de 2 filas: top row a 0, sub row a ~42px (alto fila top) */
+.stock-table thead tr.hdr-top th{ top: 0; }
+.stock-table thead tr.hdr-sub th{ top: 42px; z-index: 2; }
+
+/* Separadores visuales entre grupo Kg y columna Uni (mas gruesos) */
+.stock-table .sep-uni-r{ border-right-width: 3.5px !important; }
+.stock-table .sep-uni-l{ border-left-width: 3.5px !important; }
+.stock-table tbody td.col-uni-ini,
+.stock-table tbody td.col-uni-fin{ background: #f8fafc; }
+.stock-table tbody tr.parte-row:hover td.col-uni-ini,
+.stock-table tbody tr.parte-row:hover td.col-uni-fin{ background: #fde68a; }
+
+.stock-table tbody tr.group-header td{
+  font-size: 18px;
+}
+
+.stock-table .col-desc{
+  text-align: left;
+  min-width: 240px;
+}
+
+.stock-table tbody tr.subtotal-row td{
+  background: #f1f5f9;
+  font-weight: 800;
+}
+
+.stock-table tbody tr.group-header td{
+  background: #1f2937;
+  color: #fff;
+  font-weight: 800;
+  text-align: left;
+  font-size: 15px;
+}
+
+.stock-table tr.zero-row td{
+  opacity: 0.4;
+}
+
+.stock-table .num{
+  font-variant-numeric: tabular-nums;
+}
+
+.stock-table .neg{
+  color: #b42318;
+  font-weight: 700;
+}
+
+#result{
+  max-height: 78vh;
+  overflow: auto;
+}
+
+/* Click row + popup */
+.stock-table tbody tr.parte-row{ cursor: pointer; }
+.stock-table tbody tr.parte-row:hover td{ background: #fef3c7; }
+
+.popup-overlay{
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.45);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 1000; padding: 16px;
+}
+.popup-overlay.hidden{ display: none; }
+.popup-box{
+  background: #fff; border-radius: 12px;
+  width: min(900px, 100%); max-height: 90vh;
+  overflow: hidden; display: flex; flex-direction: column;
+  box-shadow: 0 18px 50px rgba(0,0,0,.25);
+}
+.popup-head{
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 12px 16px; border-bottom: 2px solid #111;
+  background: #111; color: #fff;
+}
+.popup-title{ font-weight: 800; font-size: 16px; }
+.popup-close{
+  background: #fff; color: #111; border: 0;
+  border-radius: 8px; padding: 6px 12px; font-weight: 800; cursor: pointer;
+}
+.popup-body{
+  padding: 14px 16px; overflow-y: auto;
+}
+.popup-body h3{
+  font-size: 14px; font-weight: 800; margin: 10px 0 6px;
+}
+.popup-body table{
+  width: 100%; border-collapse: collapse; margin-bottom: 10px;
+  font-size: 13px;
+}
+.popup-body th, .popup-body td{
+  border: 1px solid #d0d7de; padding: 4px 8px; text-align: center;
+}
+.popup-body thead th{ background: transparent; font-weight: 800; }
+.popup-body tfoot tr{ background: transparent !important; }
+.popup-body tfoot td{ background: transparent !important; font-weight: 800; }
+.popup-body .col-fecha{ width: 100px; }
+.popup-body .empty{ color: #888; font-style: italic; padding: 6px 0; }
+
+/* Toggle ocultar Stock Inicial */
+.stock-table.hide-ini .col-ini{
+  display: none !important;
+}

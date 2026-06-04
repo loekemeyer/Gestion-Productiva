@@ -16,15 +16,23 @@ const COL_SC = "SC";
 const COL_SP = "SP";
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-window.__sbClient__ = sb; // expuesto para cajones-popup.js
 
 function formatNumKgEnt(n) {
   return Number(n || 0).toLocaleString('es-AR', { minimumFractionDigits: 0, maximumFractionDigits: 3 });
 }
 
-// Selecciones de cajones por idx — persistencia en memoria de esta vista
-const cajonesSelByIdx = {};
-const pesoCajByIdx = {};
+// Tandas por idx (en memoria de esta vista)
+const tandasByIdx = {};
+
+function parseDecimalEPS(v){
+  if (v == null || v === "") return 0;
+  if (typeof v === "number") return Number.isFinite(v) ? v : 0;
+  let s = String(v).trim().replace(/[^\d,.-]/g,"");
+  if (s.includes(",") && !s.includes(".")) s = s.replace(",", ".");
+  else s = s.replace(/,/g, "");
+  const n = Number(s);
+  return Number.isFinite(n) ? n : 0;
+}
 
 // Flags por PS (carga_por_unidades, sin_cajones)
 let psFlagsMap = new Map(); // ps -> { cargaPorUnidades, sinCajones }
@@ -145,12 +153,22 @@ function escapeHtml(value) {
 /***********************
  * DATA
  ***********************/
-async function getPSDisponibles() {
-  const { data, error } = await sb
-    .from(SUPABASE_TABLE)
-    .select(COL_PS);
+// Mapa PS -> proceso (lee Tall_ProvAT_PS.especializacion)
+let procesoPorPSMapEnt = new Map();
+let psPorProcesoMapEnt = new Map();
 
+async function getPSDisponibles() {
+  const [{ data, error }, { data: flagsData }] = await Promise.all([
+    sb.from(SUPABASE_TABLE).select(COL_PS),
+    sb.from("Tall_ProvAT_PS").select("nombre, especializacion")
+  ]);
   if (error) throw error;
+  procesoPorPSMapEnt = new Map();
+  (flagsData || []).forEach(r => {
+    const ps = String(r.nombre || "").trim();
+    if (!ps) return;
+    procesoPorPSMapEnt.set(ps, (r.especializacion && String(r.especializacion).trim()) || "Sin asignar");
+  });
   return uniqueSorted((data || []).map(r => r[COL_PS]));
 }
 
@@ -195,20 +213,59 @@ async function getItemsPorPS(ps) {
 /***********************
  * UI
  ***********************/
+// 2-pasos: proceso → PS
+let procesoSelEnt = null;
 function renderPSButtons(values) {
   psGrid.innerHTML = "";
-
+  psPorProcesoMapEnt = new Map();
   values.forEach(ps => {
+    const proc = procesoPorPSMapEnt.get(ps) || "Sin asignar";
+    if (!psPorProcesoMapEnt.has(proc)) psPorProcesoMapEnt.set(proc, []);
+    psPorProcesoMapEnt.get(proc).push(ps);
+  });
+  procesoSelEnt = null;
+  renderProcesosEnt();
+}
+
+function renderProcesosEnt() {
+  psGrid.innerHTML = "";
+  const procs = [...psPorProcesoMapEnt.keys()].sort((a,b) => {
+    if (a === "Sin asignar") return 1;
+    if (b === "Sin asignar") return -1;
+    return a.localeCompare(b, "es");
+  });
+  procs.forEach(proc => {
+    const cnt = psPorProcesoMapEnt.get(proc).length;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "ps-pill proceso-pill";
+    btn.innerHTML = `${escapeHtml(proc)}<br><span style="font-size:11px;opacity:.75">${cnt} prov.</span>`;
+    btn.addEventListener("click", () => {
+      procesoSelEnt = proc;
+      renderPSDelProcesoEnt(proc);
+    });
+    psGrid.appendChild(btn);
+  });
+}
+
+function renderPSDelProcesoEnt(proc) {
+  psGrid.innerHTML = "";
+  const bar = document.createElement("div");
+  bar.style.cssText = "display:flex;align-items:center;gap:10px;width:100%;margin-bottom:10px";
+  bar.innerHTML = `<button type="button" class="ps-pill" style="background:#fff;color:#111;border:2px solid #d0d7de" id="psBackToProcEnt">← Procesos</button>
+    <div style="font-weight:800;color:#555;text-transform:uppercase;letter-spacing:1px">${escapeHtml(proc)}</div>`;
+  psGrid.appendChild(bar);
+  document.getElementById("psBackToProcEnt").addEventListener("click", () => renderProcesosEnt());
+  const list = psPorProcesoMapEnt.get(proc) || [];
+  list.sort((a,b) => a.localeCompare(b, "es")).forEach(ps => {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "ps-pill";
     btn.textContent = ps;
-
     btn.addEventListener("click", async () => {
       if (isSubmitting) return;
       await seleccionarPS(ps);
     });
-
     psGrid.appendChild(btn);
   });
 }
@@ -219,7 +276,7 @@ function renderTable(items) {
   if (!items.length) {
     resultBody.innerHTML = `
       <tr>
-        <td colspan="7" style="text-align:center;color:#b42318;font-weight:700;">
+        <td colspan="6" style="text-align:center;color:#b42318;font-weight:700;">
           No hay partes para este proveedor.
         </td>
       </tr>
@@ -232,73 +289,67 @@ function renderTable(items) {
   const isSinCaj = flags.sinCajones;
 
   const rows = items.map((item, i) => {
-    let cajCell, brutoCell, netoCell;
+    let cajCell, kgCell, tandaCell;
     if (isSinCaj) {
       // Charcas (kg) / AJ (uni): NO cajones, input directo
       const placeholder = isUni ? '0' : '0,0';
       const imode = isUni ? 'numeric' : 'decimal';
       const label = isUni ? 'uni' : 'kg';
       cajCell = `<td><span class="zero">—</span></td>`;
-      brutoCell = `<td><input class="input-kg" type="text" inputmode="${imode}" placeholder="${placeholder}" data-role="directo-${label}" data-idx="${i}"/></td>`;
-      netoCell = `<td><span class="zero">—</span></td>`;
+      kgCell = `<td><input class="input-kg" type="text" inputmode="${imode}" placeholder="${placeholder}" data-role="directo-${label}" data-idx="${i}"/></td>`;
+      tandaCell = `<td><span class="zero">—</span></td>`;
     } else {
-      // Resto: popup cajones + kg bruto/neto
-      cajCell = `<td><button type="button" class="cajpop-trigger" data-caj-trigger data-idx="${i}">📦 Cargar</button></td>`;
-      brutoCell = `<td><input class="input-kg" type="text" inputmode="decimal" placeholder="0,0" data-role="kg-bruto" data-idx="${i}"/></td>`;
-      netoCell = `<td><span class="kg-neto-cell" data-role="kg-neto" data-idx="${i}">—</span></td>`;
+      // Resto: input cajones int directo + input Kg neto directo + botón T tandas
+      const t = tandasByIdx[i];
+      const hayTandas = Array.isArray(t) && t.length > 0;
+      const totCaj = hayTandas ? t.reduce((s, x) => s + (Number(x.caj) || 0), 0) : '';
+      const totKg = hayTandas ? t.reduce((s, x) => s + (parseDecimalEPS(x.kg) || 0), 0) : '';
+      const cajVal = hayTandas ? totCaj : '';
+      const kgVal = hayTandas ? totKg : '';
+      const ro = hayTandas ? 'readonly' : '';
+      const cajCls = hayTandas ? 'input-cajones input-with-tandas' : 'input-cajones';
+      const kgCls = hayTandas ? 'input-kg input-with-tandas' : 'input-kg';
+      cajCell = `<td><input class="${cajCls}" type="text" inputmode="numeric" placeholder="0" data-role="cajones" data-idx="${i}" style="width:60px;text-align:center" value="${cajVal}" ${ro}/></td>`;
+      kgCell = `<td><input class="${kgCls}" type="text" inputmode="decimal" placeholder="0,0" data-role="kg-neto" data-idx="${i}" value="${kgVal}" ${ro}/></td>`;
+      tandaCell = `<td class="center"><button type="button" class="tanda-trigger ${hayTandas ? 'has-tandas' : ''}" data-role="tandas" data-idx="${i}" title="Cargar por tandas">${hayTandas ? t.length : '+'}</button></td>`;
     }
     return `
-      <tr data-idx="${i}" data-cajones="0" data-peso-cajones="0">
+      <tr data-idx="${i}">
         <td>${escapeHtml(item.parte)}</td>
         <td>${escapeHtml(item.proceso)}</td>
         <td>${escapeHtml(item.sc)}</td>
         <td>${escapeHtml(item.sp)}</td>
         ${cajCell}
-        ${brutoCell}
-        ${netoCell}
+        ${kgCell}
+        ${tandaCell}
       </tr>
     `;
   }).join("");
 
   resultBody.innerHTML = rows;
 
-  // Trigger del popup
-  resultBody.querySelectorAll('[data-caj-trigger]').forEach(btn => {
+  // Botón Tandas
+  resultBody.querySelectorAll('button[data-role="tandas"]').forEach(btn => {
     btn.addEventListener("click", () => {
       const i = Number(btn.dataset.idx);
-      const item = fetchedItems[i];
-      cajonesPopup.open({
-        titulo: `Cajones — ${item.parte}`,
-        initial: cajonesSelByIdx[i] || {},
-        onConfirm: (sel, totalCaj, pesoTotal) => {
-          cajonesSelByIdx[i] = sel;
-          pesoCajByIdx[i] = pesoTotal;
-          const row = btn.closest("tr");
-          row.dataset.cajones = totalCaj;
-          row.dataset.pesoCajones = pesoTotal;
-          if (totalCaj > 0) {
-            btn.classList.add("has-sel");
-            btn.innerHTML = `${totalCaj} caj<span class="sub">${pesoTotal.toLocaleString('es-AR',{maximumFractionDigits:2})} kg</span>`;
-          } else {
-            btn.classList.remove("has-sel");
-            btn.innerHTML = '📦 Cargar';
-          }
-          // Recalcular neto si ya hay bruto
-          recalcKgNetoRow(i);
-          updateEnviarState();
-        }
-      });
+      abrirTandasFilaEntPS(i);
     });
   });
 
-  // Kg Bruto → permite coma y decimal, recalcula neto
-  resultBody.querySelectorAll('input[data-role="kg-bruto"]').forEach(input => {
+  // Input cajones: solo enteros
+  resultBody.querySelectorAll('input[data-role="cajones"]').forEach(input => {
+    input.addEventListener("input", () => {
+      input.value = input.value.replace(/\D/g, "");
+      updateEnviarState();
+    });
+  });
+
+  // Input Kg neto directo (no se recalcula nada)
+  resultBody.querySelectorAll('input[data-role="kg-neto"]').forEach(input => {
     input.addEventListener("input", () => {
       input.value = input.value
         .replace(/[^0-9,]/g, "")
         .replace(/(,.*),/g, '$1');
-      const i = Number(input.dataset.idx);
-      recalcKgNetoRow(i);
       updateEnviarState();
     });
   });
@@ -313,16 +364,6 @@ function renderTable(items) {
       updateEnviarState();
     });
   });
-}
-
-function recalcKgNetoRow(i) {
-  const brutoInput = resultBody.querySelector(`input[data-role="kg-bruto"][data-idx="${i}"]`);
-  const netoSpan = resultBody.querySelector(`[data-role="kg-neto"][data-idx="${i}"]`);
-  if (!brutoInput || !netoSpan) return;
-  const bruto = parseFloat(String(brutoInput.value || "0").replace(",", ".")) || 0;
-  const pesoCaj = Number(pesoCajByIdx[i] || 0);
-  const neto = Math.max(0, bruto - pesoCaj);
-  netoSpan.textContent = neto ? formatNumKgEnt(neto) : '—';
 }
 
 function showSelectionView() {
@@ -345,6 +386,11 @@ function updateEnviarState() {
   const enabled = !isSubmitting && selectedPS && filtered.length > 0;
 
   btnEnviarCambios.classList.toggle("enabled", enabled);
+  btnEnviarCambios.disabled = !enabled;
+  if (btnEnviarCambiosTop){
+    btnEnviarCambiosTop.classList.toggle("enabled", enabled);
+    btnEnviarCambiosTop.disabled = !enabled;
+  }
 }
 
 function resetAll() {
@@ -427,12 +473,26 @@ function getItemsFromTable() {
         _modoDirecto: true
       };
     }
-    const row = resultBody.querySelector(`tr[data-idx="${i}"]`);
-    const cajones = String(row?.dataset.cajones || "0").trim();
-    const pesoCaj = Number(row?.dataset.pesoCajones || 0);
-    const brutoInput = resultBody.querySelector(`input[data-role="kg-bruto"][data-idx="${i}"]`);
-    const bruto = parseFloat(String(brutoInput?.value || "0").replace(",", ".")) || 0;
-    const kgNeto = Math.max(0, bruto - pesoCaj);
+    // Modo normal: si hay tandas, usar suma; sino input directo
+    const t = tandasByIdx[i];
+    if (Array.isArray(t) && t.length > 0){
+      const sumCaj = t.reduce((s, x) => s + (Number(x.caj) || 0), 0);
+      const sumKg = t.reduce((s, x) => s + (parseDecimalEPS(x.kg) || 0), 0);
+      return {
+        ps: item.ps,
+        proceso: item.proceso,
+        parte: item.parte,
+        sc: item.sc,
+        sp: item.sp,
+        cajones: String(sumCaj),
+        kg: sumKg > 0 ? String(sumKg) : "",
+        unidades: 0
+      };
+    }
+    const cajInput = resultBody.querySelector(`input[data-role="cajones"][data-idx="${i}"]`);
+    const kgInput = resultBody.querySelector(`input[data-role="kg-neto"][data-idx="${i}"]`);
+    const cajones = String(parseInt(cajInput?.value, 10) || 0);
+    const kgNeto = parseFloat(String(kgInput?.value || "0").replace(",", ".")) || 0;
     return {
       ps: item.ps,
       proceso: item.proceso,
@@ -443,6 +503,98 @@ function getItemsFromTable() {
       kg: kgNeto > 0 ? String(kgNeto) : "",
       unidades: 0
     };
+  });
+}
+
+// Abre popup tandas para una fila (solo PSs con cajones)
+function abrirTandasFilaEntPS(i){
+  const item = fetchedItems[i];
+  if (!item) return;
+  let initial = tandasByIdx[i] || [];
+  // Preload tanda 1 desde valores escritos a mano si no hay tandas
+  if (initial.length === 0){
+    const cajInput = resultBody.querySelector(`input[data-role="cajones"][data-idx="${i}"]`);
+    const kgInput = resultBody.querySelector(`input[data-role="kg-neto"][data-idx="${i}"]`);
+    const caj = parseInt(cajInput?.value, 10) || 0;
+    const kg = parseDecimalEPS(kgInput?.value);
+    if (caj > 0 || kg > 0) initial = [{ caj, kg, uni: 0 }];
+  }
+  window.tandasPopup.open({
+    titulo: `Tandas — ${item.parte}`,
+    initial,
+    pedirCaj: true,
+    pedirKg: true,
+    pedirUni: false,
+    onConfirm: (tandas, totales) => {
+      if (tandas.length === 0 && totales.caj === 0 && totales.kg === 0){
+        delete tandasByIdx[i];
+      } else {
+        tandasByIdx[i] = tandas;
+      }
+      renderTable(fetchedItems);
+      updateEnviarState();
+    }
+  });
+}
+
+// Popup confirmación EntregaPS
+function mostrarConfirmacionEntregaPS(items){
+  return new Promise(resolve => {
+    let overlay = document.getElementById("confirmEntregaPSOverlay");
+    if (!overlay){
+      overlay = document.createElement("div");
+      overlay.id = "confirmEntregaPSOverlay";
+      overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:2000;padding:16px";
+      overlay.innerHTML = `
+        <div style="background:#fff;border-radius:14px;width:min(700px,100%);max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.3);overflow:hidden">
+          <div style="background:#111;color:#fff;padding:14px 18px;font-weight:800;font-size:17px">Confirmar Entrega</div>
+          <div id="confirmEntregaPSBody" style="padding:14px 18px;overflow-y:auto;flex:1"></div>
+          <div style="padding:12px 18px;display:flex;justify-content:flex-end;gap:10px;border-top:1px solid #e5e7eb">
+            <button id="confirmEntregaPSCancel" type="button" style="background:#fff;color:#111;border:2px solid #d0d7de;border-radius:10px;padding:10px 20px;font-weight:800;cursor:pointer;font-size:15px">Cancelar</button>
+            <button id="confirmEntregaPSOk" type="button" style="background:#111;color:#fff;border:0;border-radius:10px;padding:10px 24px;font-weight:800;cursor:pointer;font-size:15px">✓ Confirmar Entrega</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(overlay);
+    }
+    const flags = getPSFlags(selectedPS);
+    const isUni = flags.cargaPorUnidades;
+    const isSinCaj = flags.sinCajones;
+    const labelCaj = isSinCaj ? (isUni ? "Unidades" : "—") : "Cajones Entregados";
+    const labelKg = isSinCaj ? (isUni ? "—" : "Kg Neto") : "Kg Neto";
+    const body = document.getElementById("confirmEntregaPSBody");
+    const rows = items.map(it => {
+      const caj = Number(it.cajones) || 0;
+      const kg = parseDecimalEPS(it.kg);
+      const uni = Number(it.unidades) || 0;
+      const cajCell = isSinCaj ? (isUni ? `<b>${uni}</b>` : `—`) : `<b>${caj}</b>`;
+      const kgCell = isSinCaj ? (isUni ? `—` : `<b>${kg.toLocaleString('es-AR',{maximumFractionDigits:2})}</b>`) : `<b>${kg.toLocaleString('es-AR',{maximumFractionDigits:2})}</b>`;
+      return `<tr>
+        <td style="padding:8px 14px;border:1px solid #d0d7de;text-align:center;white-space:nowrap">${escapeHtml(it.parte)}</td>
+        <td style="padding:8px 14px;border:1px solid #d0d7de;text-align:center;white-space:nowrap">${escapeHtml(it.sp || it.sc || "")}</td>
+        <td style="padding:8px 14px;border:1px solid #d0d7de;text-align:center;white-space:nowrap">${cajCell}</td>
+        <td style="padding:8px 14px;border:1px solid #d0d7de;text-align:center;white-space:nowrap">${kgCell}</td>
+      </tr>`;
+    }).join("");
+    body.innerHTML = `
+      <div style="font-weight:700;margin-bottom:10px;color:#555;font-size:15px;text-align:center">${items.length} artículo${items.length>1?'s':''} de <b style="color:#111">${escapeHtml(selectedPS)}</b></div>
+      <div style="display:flex;justify-content:center">
+        <table style="width:auto;border-collapse:collapse;font-size:16px;table-layout:auto">
+          <thead><tr style="background:#f3f4f6">
+            <th style="padding:8px 14px;border:1px solid #d0d7de;text-align:center;white-space:nowrap;font-size:15px">Descripción</th>
+            <th style="padding:8px 14px;border:1px solid #d0d7de;text-align:center;white-space:nowrap;font-size:15px">Sector</th>
+            <th style="padding:8px 14px;border:1px solid #d0d7de;text-align:center;white-space:nowrap;font-size:15px">${labelCaj}</th>
+            <th style="padding:8px 14px;border:1px solid #d0d7de;text-align:center;white-space:nowrap;font-size:15px">${labelKg}</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    `;
+    overlay.style.display = "flex";
+    const cleanup = () => { overlay.style.display = "none"; };
+    document.getElementById("confirmEntregaPSOk").onclick = () => { cleanup(); resolve(true); };
+    document.getElementById("confirmEntregaPSCancel").onclick = () => { cleanup(); resolve(false); };
+    overlay.onclick = (e) => { if (e.target === overlay){ cleanup(); resolve(false); } };
   });
 }
 
@@ -463,6 +615,24 @@ btnVolver.addEventListener("click", () => {
   if (isSubmitting) return;
   resetAll();
 });
+
+// Botón Limpiar: vacía todo lo cargado (inputs + tandas) del PS actual
+const btnLimpiar = document.getElementById("btnLimpiar");
+if (btnLimpiar){
+  btnLimpiar.addEventListener("click", () => {
+    if (!selectedPS){ alert("Seleccioná un proveedor primero."); return; }
+    const items = getItemsFromTable();
+    const filtered = filterItemsToSend(items);
+    const hayTandas = Object.keys(tandasByIdx).length > 0;
+    if (!filtered.length && !hayTandas){ alert("No hay nada cargado para limpiar."); return; }
+    if (!confirm("¿Vaciar todo lo cargado para " + selectedPS + "? (cajones, kg, tandas)")) return;
+    // Limpiar tandas
+    Object.keys(tandasByIdx).forEach(k => delete tandasByIdx[k]);
+    // Re-render para vaciar inputs
+    renderTable(fetchedItems);
+    updateEnviarState();
+  });
+}
 
 okBtn.addEventListener("click", () => {
   resetAll();
@@ -500,7 +670,7 @@ btnEnviarCambios.addEventListener("click", async () => {
     return;
   }
 
-  const ok = confirm("¿Confirmar envío?");
+  const ok = await mostrarConfirmacionEntregaPS(items);
   if (!ok) return;
 
   lastSendCode = genNumericCode(4);
@@ -562,6 +732,13 @@ async function init() {
       setStatus("Seleccioná un proveedor para continuar.", "bad");
     } else {
       setStatus("No se encontraron proveedores.", "bad");
+    }
+
+    // Auto-seleccionar PS si viene ?ps=X en la URL
+    const params = new URLSearchParams(window.location.search);
+    const psParam = params.get("ps");
+    if (psParam && availablePS.includes(psParam)) {
+      await seleccionarPS(psParam);
     }
   } catch (e) {
     console.error(e);

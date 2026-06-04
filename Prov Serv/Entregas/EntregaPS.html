@@ -5,8 +5,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Envío a Proveedores de Servicios</title>
-  <link rel="stylesheet" href="EntregaPS.css" />
-  <link rel="stylesheet" href="../../cajones-popup.css?v=20260528a" />
+  <link rel="stylesheet" href="EntregaPS.css?v=20260604d" />
+  <link rel="stylesheet" href="../../tandas-popup.css?v=20260604a" />
 </head>
 <body>
 
@@ -23,6 +23,7 @@
       <div class="header-right hidden" id="selectedBar">
         <button id="btnVolver" class="btn-volver" type="button">← Cambiar proveedor</button>
         <div id="selectedBadge" class="selected-badge"></div>
+        <button id="btnLimpiar" class="btn-volver" type="button" title="Vaciar todo lo cargado">🗑 Limpiar</button>
         <button id="btnEnviarCambiosTop" class="btn-enviar" type="button" disabled>Enviar</button>
       </div>
     </div>
@@ -48,8 +49,8 @@
               <th>SC</th>
               <th>SP</th>
               <th>Caj</th>
-              <th>Kg Bruto</th>
-              <th>Kg Neto</th>
+              <th>Kg<br>Neto</th>
+              <th title="Tandas">T</th>
             </tr>
           </thead>
           <tbody id="resultBody"></tbody>
@@ -58,7 +59,8 @@
 
       <div class="bottom-actions">
         <div id="tableMsg" class="status"></div>
-        <button id="btnEnviarCambios" class="btn-enviar hidden" type="button">
+        <!-- btnEnviarCambios oculto: el botón visible es btnEnviarCambiosTop en el header. Se mantiene oculto solo como destino del .click() del mirror. -->
+        <button id="btnEnviarCambios" class="btn-enviar hidden" type="button" style="display:none">
           Enviar
         </button>
       </div>
@@ -78,7 +80,7 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-  <script src="../../cajones-popup.js?v=20260528a"></script>
-  <script src="EntregaPS.js"></script>
+  <script src="../../tandas-popup.js?v=20260604a"></script>
+  <script src="EntregaPS.js?v=20260604d"></script>
 </body>
 </html>

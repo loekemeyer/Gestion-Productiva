@@ -19,22 +19,16 @@ window.__sbClient__ = sb; // expuesto para cajones-popup.js
 const psGrid = document.getElementById("psGrid");
 const statusEl = document.getElementById("status");
 const btnVolver = document.getElementById("btnVolver");
-const btnSiguiente = document.getElementById("btnSiguiente");
 const btnEnviar = document.getElementById("btnEnviar");
-const btnVolverFase1 = document.getElementById("btnVolverFase1");
 const btnVolverPS = document.getElementById("btnVolverPS");
 const successCodeEl = document.getElementById("successCode");
 
 const fase0 = document.getElementById("fase0");
 const fase1 = document.getElementById("fase1");
-const fase2 = document.getElementById("fase2");
 const fase3 = document.getElementById("fase3");
 
 const fase1TableBody = document.getElementById("fase1TableBody");
-const fase2TableBody = document.getElementById("fase2TableBody");
 const fase1Title = document.getElementById("fase1Title");
-const fase2Title = document.getElementById("fase2Title");
-const fase2HdrCantidad = document.getElementById("fase2HdrCantidad");
 
 let currentPhase = 0;
 let selectedPS = "";
@@ -199,7 +193,7 @@ async function getSpKgMap() {
          sb.from("Entregas PS").select('"Sector SP","KG"').limit(20000).then(r => r.data || []),
          sb.from("Envios a Talleristas").select('"Sector","KG"').limit(20000).then(r => r.data || []),
          sb.from("Envios a PS").select('"Prov_Serv","Sector SC","Sector SP","Cajones","KG"').limit(20000).then(r => r.data || []),
-         sb.from("Entregas Tallerista Virgilio").select("*").then(r => (r.data || []).filter(x => {
+         cargarTablaPaginada("Entregas Tallerista Virgilio").then(r => r.filter(x => {
            const cod = String(x["Codigo_Tall"] || "").trim();
            const nom = String(x["Nombre_Tall"] || "").trim().toLowerCase();
            return cod === "0001" || nom.includes("log");
@@ -356,72 +350,245 @@ function normalizeText(value) {
     .replace(/\s+/g, " ");
 }
 
+function normalizeCod3(value) {
+  let s = String(value || "").trim().toUpperCase();
+  if (!s) return "";
+  const m = s.match(/^(\d+)(.*)$/);
+  if (!m) return s;
+  return `${m[1].padStart(3, "0")}${String(m[2] || "").trim().toUpperCase()}`;
+}
+
+async function cargarTablaPaginada(tabla, filtros) {
+  const all = [];
+  const PAGE = 1000;
+  let from = 0;
+  while (true) {
+    let q = sb.from(tabla).select("*").range(from, from + PAGE - 1);
+    if (filtros) filtros.forEach(f => { q = q.neq(f.col, f.val); });
+    const { data, error } = await q;
+    if (error) throw new Error(`${tabla}: ${error.message}`);
+    if (!data || !data.length) break;
+    all.push(...data);
+    if (data.length < PAGE) break;
+    from += PAGE;
+  }
+  return all;
+}
+
 async function precargarDatosStock() {
   if (stockDataCache) return stockDataCache;
   if (stockDataPromise) return stockDataPromise;
 
   stockDataPromise = (async () => {
-    const [mvRows, enviosPSRows, entregasPSRows] = await Promise.all([
-      sb.from("mv_stock_online_sp").select("sp,max_caj_sp_cerv,online_caj").then(r => r.data || []),
-      sb.from("Envios a PS").select('"Prov_Serv","Sector SP","Cajones"').limit(20000).then(r => r.data || []),
-      sb.from("Entregas PS").select('"Prov_Serv","Sector SP","Cajones"').limit(20000).then(r => r.data || [])
+    // Calc inline (legacy restaurado). Movimientos (envios/entregas PS+Tall+Log) usan
+    // Cajones SUMA DIRECTA. Stock inicial y fabricacion derivan de Kg (no son movimientos).
+    const [
+      spKgRows, entregasPSRows, enviosTallRows, enviosAPSRows,
+      entregasLogRows, despieceRows, causaEfectoRows, dbEspejoRows
+    ] = await Promise.all([
+      sb.from("SP Kg").select("*").then(r => r.data || []),
+      cargarTablaPaginada("Entregas PS").then(r => r),
+      cargarTablaPaginada("Envios a Talleristas").then(r => r),
+      cargarTablaPaginada("Envios a PS").then(r => r),
+      cargarTablaPaginada("Entregas_Tall_Todas").then(r => r.filter(x => {
+        const cod = String(x["Codigo_Tall"] || "").trim();
+        const nom = String(x["Nombre_Tall"] || "").trim().toLowerCase();
+        return cod === "0001" || nom.includes("log");
+      })),
+      sb.from("Despiece x Articulo").select('"COD","Sector Proce"').then(r => r.data || []),
+      sb.from("Causa-Efecto").select("*").then(r => r.data || []),
+      cargarTablaPaginada("db_n8n_espejo", [{ col: "Legajo", val: "1" }])
     ]);
 
-    const mvBySP = new Map();
-    mvRows.forEach(r => {
-      const k = normalizeText(r.sp);
-      if (!k) return;
-      mvBySP.set(k, {
-        maxCajCerv: Number(r.max_caj_sp_cerv) || 0,
-        onlineCaj: Number(r.online_caj) || 0
-      });
+    // SP Kg index: spKgByKey y maps auxiliares
+    const spKgByKey = new Map();
+    const spSet = new Set();
+    const kgXUniMap = new Map(); // SP uppercase -> KGxUni
+    const kgXCajonMap = new Map(); // SP normalizado -> KGxCajon
+    const mvBySP = new Map(); // mantiene API compatibility con renderizarFase1
+    spKgRows.forEach(r => {
+      const sp = String(r["Sp"] || "").trim();
+      if (!sp) return;
+      const key = normalizeText(sp);
+      const kgCaj = parseDecimal(r["KG x Cajon"] || r["KG Cajon"] || 0);
+      const kgU = parseDecimal(r["Kg X Uni"] || 0);
+      const stockIni = parseDecimal(r["Stock Inicial"] || 0);
+      const maxCaj = parseDecimal(r["Max Cajon SP Cerv"] || 0);
+      spKgByKey.set(key, { kgCaj, kgU, stockIni, maxCaj });
+      spSet.add(sp.toUpperCase());
+      kgXCajonMap.set(key, kgCaj);
+      if (kgU > 0) kgXUniMap.set(sp.toUpperCase(), kgU);
+      // Online SP inicial (sin movimientos): stock inicial / kg cajon
+      const stockIniCaj = kgCaj > 0 ? stockIni / kgCaj : 0;
+      mvBySP.set(key, { maxCajCerv: maxCaj, onlineCaj: stockIniCaj });
     });
+
+    // ENTREGAS PS por SP: sumar Cajones DIRECTO (suman al SP)
+    entregasPSRows.forEach(r => {
+      const k = normalizeText(r["Sector SP"]);
+      const caj = Number(r["Cajones"] || 0);
+      if (!k || !caj) return;
+      const mv = mvBySP.get(k);
+      if (mv) mv.onlineCaj += caj;
+    });
+
+    // ENVIOS PS por Sector SC (cuando SC es un SP que se manda como crudo a otro PS): resta del SP
+    enviosAPSRows.forEach(r => {
+      const k = normalizeText(r["Sector SC"]);
+      const caj = Number(r["Cajones"] || 0);
+      if (!k || !caj) return;
+      const mv = mvBySP.get(k);
+      if (mv) mv.onlineCaj -= caj;
+    });
+
+    // ENVIOS TALLERISTAS por Sector: resta del SP (solo si el sector es un SP valido)
+    enviosTallRows.forEach(r => {
+      const k = normalizeText(r["Sector"]);
+      const caj = Number(r["Cajones"] || 0);
+      if (!k || !caj) return;
+      const mv = mvBySP.get(k);
+      if (mv) mv.onlineCaj -= caj;
+    });
+
+    // ENTREGAS TALL VIRG -> Log (cod=0001): cruza por Despiece x Articulo (Cod -> Sector Proce)
+    const codToSector = new Map();
+    despieceRows.forEach(r => {
+      const cod = normalizeCod3(r["COD"]);
+      const sector = normalizeText(r["Sector Proce"]);
+      if (cod && sector) codToSector.set(cod, sector);
+    });
+    entregasLogRows.forEach(r => {
+      const codN = normalizeCod3(r["Cod"]);
+      const cajas = Number(r["Cajas"] || 0);
+      if (!codN || !cajas) return;
+      const sector = codToSector.get(codN);
+      if (!sector) return;
+      const mv = mvBySP.get(sector);
+      if (mv) mv.onlineCaj -= cajas;
+    });
+
+    // FABRICACION (derivada de db_n8n_espejo + Causa-Efecto): aumenta/descuenta SP en cajones
+    const causaMap = new Map();
+    causaEfectoRows.forEach(r => {
+      const matriz = String(r["Matriz"] || "").trim();
+      if (!matriz) return;
+      const desc = String(r["Descuenta"] || "").trim().toUpperCase();
+      const aum = String(r["Aumenta"] || "").trim().toUpperCase();
+      if (!spSet.has(desc) && !spSet.has(aum)) return;
+      if (!causaMap.has(matriz)) causaMap.set(matriz, []);
+      causaMap.get(matriz).push({ descuenta: desc, aumenta: aum });
+    });
+    const prodMap = new Map();
+    dbEspejoRows.forEach(r => {
+      const matriz = String(r["Matriz"] || "").trim();
+      const uni = parseDecimal(r["Uni"]);
+      if (!matriz || !uni) return;
+      if (!causaMap.has(matriz)) return;
+      const key = `${matriz}|||${r["Mes"]}|||${r["Dia"]}|||${r["Legajo"]}`;
+      if (!prodMap.has(key)) prodMap.set(key, { matriz, uni: 0 });
+      prodMap.get(key).uni += uni;
+    });
+    for (const [, { matriz, uni }] of prodMap.entries()) {
+      const efectos = causaMap.get(matriz) || [];
+      for (const ef of efectos) {
+        if (spSet.has(ef.aumenta)) {
+          const k = normalizeText(ef.aumenta);
+          const kgU = kgXUniMap.get(ef.aumenta) || 0;
+          const kgCaj = kgXCajonMap.get(k) || 0;
+          if (kgCaj > 0) {
+            const fabCaj = (uni * kgU) / kgCaj;
+            const mv = mvBySP.get(k);
+            if (mv) mv.onlineCaj += fabCaj;
+          }
+        }
+        if (spSet.has(ef.descuenta)) {
+          const k = normalizeText(ef.descuenta);
+          const kgU = kgXUniMap.get(ef.descuenta) || 0;
+          const kgCaj = kgXCajonMap.get(k) || 0;
+          if (kgCaj > 0) {
+            const fabCaj = (uni * kgU) / kgCaj;
+            const mv = mvBySP.get(k);
+            if (mv) mv.onlineCaj -= fabCaj;
+          }
+        }
+      }
+    }
 
     // Online PS POR (PS, SP) y global por SP
     // global = suma todos los PSs (todos los provs que entregan esa parte)
+    // Cajones para columna numerica + Kg para popup desglose
     const onlinePSCajGlobalBySP = new Map();
     const onlinePSCajByPSAndSP = new Map(); // key: `${ps}||${sp}` -> caj
+    const onlinePSKgByPSAndSP = new Map();  // key: `${ps}||${sp}` -> kg
+    const onlinePSUniByPSAndSP = new Map(); // key: `${ps}||${sp}` -> uni (solo para PSs cargaPorUnidades)
 
-    const addCaj = (ps, sp, c) => {
-      if (!sp || !c) return;
-      onlinePSCajGlobalBySP.set(sp, (onlinePSCajGlobalBySP.get(sp) || 0) + c);
-      if (ps) {
+    const addRow = (ps, sp, caj, kg, uni, signo) => {
+      if (!sp) return;
+      if (caj) {
+        onlinePSCajGlobalBySP.set(sp, (onlinePSCajGlobalBySP.get(sp) || 0) + caj * signo);
+        if (ps) {
+          const k = `${ps}||${sp}`;
+          onlinePSCajByPSAndSP.set(k, (onlinePSCajByPSAndSP.get(k) || 0) + caj * signo);
+        }
+      }
+      if (kg && ps) {
         const k = `${ps}||${sp}`;
-        onlinePSCajByPSAndSP.set(k, (onlinePSCajByPSAndSP.get(k) || 0) + c);
+        onlinePSKgByPSAndSP.set(k, (onlinePSKgByPSAndSP.get(k) || 0) + kg * signo);
+      }
+      if (uni && ps) {
+        const k = `${ps}||${sp}`;
+        onlinePSUniByPSAndSP.set(k, (onlinePSUniByPSAndSP.get(k) || 0) + uni * signo);
       }
     };
-    enviosPSRows.forEach(r => addCaj(
+    enviosAPSRows.forEach(r => addRow(
       String(r["Prov_Serv"] || "").trim(),
       normalizeText(r["Sector SP"]),
-      Number(r["Cajones"] || 0)
+      Number(r["Cajones"] || 0),
+      Number(r["KG"] || 0),
+      Number(r["Unidades"] || 0),
+      +1
     ));
-    entregasPSRows.forEach(r => addCaj(
+    entregasPSRows.forEach(r => addRow(
       String(r["Prov_Serv"] || "").trim(),
       normalizeText(r["Sector SP"]),
-      -Number(r["Cajones"] || 0)
+      Number(r["Cajones"] || 0),
+      Number(r["KG"] || 0),
+      0, // Entregas PS no tiene columna Unidades
+      -1
     ));
 
-    stockDataCache = { mvBySP, onlinePSCajGlobalBySP, onlinePSCajByPSAndSP };
+    stockDataCache = { mvBySP, onlinePSCajGlobalBySP, onlinePSCajByPSAndSP, onlinePSKgByPSAndSP, onlinePSUniByPSAndSP };
     return stockDataCache;
   })();
 
   return stockDataPromise;
 }
 
-// Devuelve [{ps, caj}, ...] solo PSs con online != 0 para la parte sp
+// Devuelve [{ps, kg, caj, uni}, ...] PSs con kg/cajones/uni online != 0 para la parte sp
 function getBreakdownPorPS(sp) {
   if (!stockDataCache) return [];
   const key = normalizeText(sp);
-  const out = [];
-  for (const [k, caj] of stockDataCache.onlinePSCajByPSAndSP.entries()) {
-    if (!caj) continue;
-    const idx = k.indexOf("||");
-    if (idx < 0) continue;
-    if (k.slice(idx + 2) !== key) continue;
-    out.push({ ps: k.slice(0, idx), caj });
+  const psSet = new Set();
+  for (const m of [stockDataCache.onlinePSKgByPSAndSP, stockDataCache.onlinePSCajByPSAndSP, stockDataCache.onlinePSUniByPSAndSP]) {
+    for (const k of m.keys()) {
+      const idx = k.indexOf("||");
+      if (idx >= 0 && k.slice(idx + 2) === key) psSet.add(k.slice(0, idx));
+    }
   }
-  out.sort((a, b) => b.caj - a.caj);
+  const out = [];
+  for (const ps of psSet) {
+    const kg = stockDataCache.onlinePSKgByPSAndSP.get(`${ps}||${key}`) || 0;
+    const caj = stockDataCache.onlinePSCajByPSAndSP.get(`${ps}||${key}`) || 0;
+    const uni = stockDataCache.onlinePSUniByPSAndSP.get(`${ps}||${key}`) || 0;
+    if (!kg && !caj && !uni) continue;
+    out.push({ ps, kg, caj, uni });
+  }
+  out.sort((a, b) => Math.abs(b.kg) + Math.abs(b.uni) - Math.abs(a.kg) - Math.abs(a.uni));
   return out;
+}
+
+function formatKg(n) {
+  return Number(n || 0).toLocaleString('es-AR', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 }
 
 function calcCajonesSugeridos(sp) {
@@ -438,18 +605,23 @@ function calcCajonesSugeridos(sp) {
   return Math.max(0, Math.round(mv.maxCajCerv - onlineSPClamp - onlinePSClamp));
 }
 
+// Mapa global: PS -> proceso (especializacion) leído de Tall_ProvAT_PS
+let procesoPorPSMap = new Map();
+let psPorProcesoMap = new Map(); // proceso -> [ps,...]
+
 async function getPSDisponibles() {
   const { data, error } = await sb.from(SUPABASE_TABLE).select(COL_PS);
   if (error) throw error;
-  // Cargar flags carga_por_unidades de Tall_ProvAT_PS en paralelo
+  // Cargar flags + especializacion de Tall_ProvAT_PS en paralelo
   try {
-    const { data: flagsData } = await sb.from("Tall_ProvAT_PS").select("nombre, carga_por_unidades, sin_cajones");
+    const { data: flagsData } = await sb.from("Tall_ProvAT_PS").select("nombre, carga_por_unidades, sin_cajones, especializacion");
     if (flagsData) {
       cargaPorUniMap = new Map(flagsData.map(r => [String(r.nombre || "").trim(), Boolean(r.carga_por_unidades)]));
       sinCajonesMap = new Map(flagsData.map(r => [String(r.nombre || "").trim(), Boolean(r.sin_cajones)]));
+      procesoPorPSMap = new Map(flagsData.map(r => [String(r.nombre || "").trim(), (r.especializacion && String(r.especializacion).trim()) || "Sin asignar"]));
     }
   } catch (e) {
-    console.warn("No se pudo cargar carga_por_unidades flags:", e);
+    console.warn("No se pudo cargar flags PS:", e);
   }
   return uniqueSorted((data || []).map(r => r[COL_PS]));
 }
@@ -487,33 +659,75 @@ function mostrarFase(n) {
   currentPhase = n;
   fase0.classList.toggle("hidden", n !== 0);
   fase1.classList.toggle("hidden", n !== 1);
-  fase2.classList.toggle("hidden", n !== 2);
   fase3.classList.toggle("hidden", n !== 3);
   btnVolver.classList.toggle("hidden", n === 0 || n === 3);
-  // Al entrar a fase 2, resetear fecha a hoy + ajustar UI Kg vs Uni
-  if (n === 2) {
+  // Al entrar a Fase 1, resetear fecha a hoy
+  if (n === 1) {
     const fechaInput = document.getElementById("fechaEnvio");
-    if (fechaInput) fechaInput.value = new Date().toISOString().slice(0,10);
-    if (fase2Title) fase2Title.textContent = cargaPorUnidades ? "Cargar Unidades" : "Cargar Pesos (Kg)";
-    if (fase2HdrCantidad) fase2HdrCantidad.textContent = cargaPorUnidades ? "Uni" : "Kg Bruto";
+    if (fechaInput && !fechaInput.value) fechaInput.value = new Date().toISOString().slice(0,10);
   }
 }
 
-function actualizarBtnSiguiente() {
+function actualizarBtnEnviar() {
   const buf = getBuffer();
   const tieneItems = buf.some(b => b.ps === selectedPS && (
     Number(b.cajones) > 0 || Number(b.unidades) > 0 || parseDecimal(b.kg) > 0
   ));
-  btnSiguiente.disabled = !tieneItems;
-  btnSiguiente.classList.toggle("disabled", !tieneItems);
-  btnSiguiente.classList.remove("hidden");
-  // Si sinCajones: el botón actúa como Enviar directo (no hay Fase 2)
-  btnSiguiente.textContent = sinCajones ? "Enviar" : "Siguiente →";
+  btnEnviar.disabled = !tieneItems;
+  btnEnviar.classList.toggle("disabled", !tieneItems);
+  btnEnviar.classList.remove("hidden");
+  btnEnviar.textContent = "Enviar";
 }
+// Alias para no romper llamadas existentes
+const actualizarBtnSiguiente = actualizarBtnEnviar;
 
+// Render 2-pasos: primero procesos, click → PSs del proceso
+let procesoSeleccionado = null;
 function renderPSButtons(values) {
   psGrid.innerHTML = "";
+  // Construir mapa proceso -> [ps]
+  psPorProcesoMap = new Map();
   values.forEach(ps => {
+    const proc = procesoPorPSMap.get(ps) || "Sin asignar";
+    if (!psPorProcesoMap.has(proc)) psPorProcesoMap.set(proc, []);
+    psPorProcesoMap.get(proc).push(ps);
+  });
+  procesoSeleccionado = null;
+  renderProcesos();
+}
+
+function renderProcesos() {
+  psGrid.innerHTML = "";
+  const procs = [...psPorProcesoMap.keys()].sort((a,b) => {
+    if (a === "Sin asignar") return 1;
+    if (b === "Sin asignar") return -1;
+    return a.localeCompare(b, "es");
+  });
+  procs.forEach(proc => {
+    const cnt = psPorProcesoMap.get(proc).length;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "ps-pill proceso-pill";
+    btn.innerHTML = `${escapeHtml(proc)}<br><span style="font-size:11px;opacity:.75">${cnt} prov.</span>`;
+    btn.addEventListener("click", () => {
+      procesoSeleccionado = proc;
+      renderPSDelProceso(proc);
+    });
+    psGrid.appendChild(btn);
+  });
+}
+
+function renderPSDelProceso(proc) {
+  psGrid.innerHTML = "";
+  // Barra superior con back + label del proceso
+  const bar = document.createElement("div");
+  bar.style.cssText = "display:flex;align-items:center;gap:10px;width:100%;margin-bottom:10px";
+  bar.innerHTML = `<button type="button" class="ps-pill" style="background:#fff;color:#111;border:2px solid #d0d7de" id="psBackToProc">← Procesos</button>
+    <div style="font-weight:800;color:#555;text-transform:uppercase;letter-spacing:1px">${escapeHtml(proc)}</div>`;
+  psGrid.appendChild(bar);
+  document.getElementById("psBackToProc").addEventListener("click", () => renderProcesos());
+  const list = psPorProcesoMap.get(proc) || [];
+  list.sort((a,b) => a.localeCompare(b, "es")).forEach(ps => {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "ps-pill";
@@ -577,7 +791,13 @@ function renderizarFase1() {
 
     const rowClass = (mv && mv.maxCajCerv === 0) ? "row-max-zero" : "";
 
-    let cajCellHtml;
+    // Tandas (si hay): inputs Caj/Kg read-only mostrando totales sumados
+    const tandasArr = (bufItem && Array.isArray(bufItem.tandas)) ? bufItem.tandas : [];
+    const hayTandas = tandasArr.length > 0;
+    const totCajTandas = tandasArr.reduce((s, t) => s + (Number(t.caj) || 0), 0);
+    const totKgTandas = tandasArr.reduce((s, t) => s + (parseDecimal(t.kg) || 0), 0);
+
+    let cajCellHtml, kgCellHtml, tandaCellHtml = "";
     if (sinCajones) {
       // Charcas (kg) / AJ Adhesivos (uni): input directo en Fase 1
       const placeholder = cargaPorUnidades ? '0' : '0,0';
@@ -585,37 +805,56 @@ function renderizarFase1() {
       const valStored = bufItem ? (cargaPorUnidades ? (bufItem.unidades || '') : (bufItem.kg || '')) : '';
       const labelTipo = cargaPorUnidades ? 'uni' : 'kg';
       cajCellHtml = `<input type="text" inputmode="${imode}" class="cell-input input-directo" data-tipo="${labelTipo}" placeholder="${placeholder}" value="${valStored}" autocomplete="off" style="width:80px">`;
+      kgCellHtml = `<span class="zero">—</span>`;
     } else {
-      const triggerCls = bufCajVal > 0 ? 'cajpop-trigger has-sel' : 'cajpop-trigger';
-      const triggerLabel = bufCajVal > 0
-        ? `${bufCajVal} caj<span class="sub">${bufPesoCaj.toLocaleString('es-AR',{maximumFractionDigits:2})} kg</span>`
-        : '📦 Cargar';
-      cajCellHtml = `<button type="button" class="${triggerCls}" data-action="popup-cajones">${triggerLabel}</button>`;
+      // PSs con cajones: input cajones int + input kg neto decimal (unificado Fase 1)
+      const bufKgVal = bufItem ? (bufItem.kg || '') : '';
+      const cajVal = hayTandas ? totCajTandas : (bufCajVal || '');
+      const kgVal = hayTandas ? (totKgTandas > 0 ? String(totKgTandas) : '') : bufKgVal;
+      const cajCls = hayTandas ? 'cell-input input-cajones input-with-tandas' : 'cell-input input-cajones';
+      const kgCls  = hayTandas ? 'cell-input input-kg input-with-tandas' : 'cell-input input-kg';
+      const ro = hayTandas ? 'readonly' : '';
+      cajCellHtml = `<input type="text" inputmode="numeric" class="${cajCls}" placeholder="0" value="${cajVal}" autocomplete="off" style="width:60px;text-align:center" ${ro}>`;
+      kgCellHtml = `<input type="text" inputmode="decimal" class="${kgCls}" placeholder="0,0" value="${kgVal}" autocomplete="off" style="width:80px;text-align:center" ${ro}>`;
+      tandaCellHtml = `<button type="button" class="tanda-trigger ${hayTandas ? 'has-tandas' : ''}" data-action="tandas" title="Cargar por tandas">${hayTandas ? tandasArr.length : '+'}</button>`;
     }
 
     return `
       <tr class="${rowClass}" data-idx="${i}" data-sug="${sug ?? ""}" data-sp="${escapeHtml(item.sp)}" data-parte="${escapeHtml(item.parte)}" data-cajones="${bufCajVal}" data-peso-cajones="${bufPesoCaj}">
         <td>${escapeHtml(item.parte)}</td>
         <td>${escapeHtml(item.proceso)}</td>
-        <td class="right"><b>${maxTxt}</b></td>
-        <td class="${onlineSPClass}"><b>${onlineSPTxt}</b></td>
-        <td class="right">
+        <td class="right col-caj-only"><b>${maxTxt}</b></td>
+        <td class="${onlineSPClass} col-caj-only"><b>${onlineSPTxt}</b></td>
+        <td class="right col-caj-only">
           <div class="cell-combo">
             <span><b>${onlinePSTxt}</b></span>
             <button type="button" class="mini-popup-btn" data-action="popup-online">+</button>
           </div>
         </td>
-        <td class="right sug-cell"><b>${sugTxt}</b></td>
+        <td class="right sug-cell col-caj-only"><b>${sugTxt}</b></td>
         <td>${escapeHtml(item.sc)}</td>
         <td class="right">${cajCellHtml}</td>
-        <td class="center"><div class="${faltClass}">${faltTxt}</div></td>
+        <td class="right col-caj-only">${kgCellHtml}</td>
+        <td class="center col-caj-only">${tandaCellHtml}</td>
+        <td class="center col-caj-only"><div class="${faltClass}">${faltTxt}</div></td>
       </tr>
     `;
   }).join("");
 
+  // Toggle clase para ocultar columnas de cajones (Max/Online SP/Online PS/Cajones a Enviar/F)
+  // cuando el PS no usa cajones (Charcas, AJ Adhesivos).
+  const tbl = fase1TableBody.closest("table");
+  if (tbl) tbl.classList.toggle("hide-caj-cols", sinCajones);
+  // Rename header "Caj" segun tipo de carga
+  const hdrCant = document.getElementById("fase1HdrCantidad");
+  if (hdrCant) {
+    hdrCant.textContent = sinCajones
+      ? (cargaPorUnidades ? "Uni" : "Kg")
+      : "Caj";
+  }
+
   fase1TableBody.querySelectorAll("tr").forEach((row, idx) => {
     const box = row.querySelector(".faltante-box");
-    const trigger = row.querySelector('[data-action="popup-cajones"]');
     const inputDirecto = row.querySelector(".input-directo");
 
     if (inputDirecto) {
@@ -628,21 +867,26 @@ function renderizarFase1() {
       inputDirecto.addEventListener("change", () => registrarCambioFila1Directo(idx));
     }
 
-    if (trigger) {
-      trigger.addEventListener("click", () => {
-        const item = fetchedItems[idx];
-        const bufKey = `${selectedPS}__${item.sc}__${item.parte}`;
-        const buf = getBuffer();
-        const bufItem = buf.find(b => `${b.ps}__${b.sc}__${b.parte}` === bufKey);
-        const initial = (bufItem && bufItem.cajonesSel) || {};
-        cajonesPopup.open({
-          titulo: `Cajones — ${item.parte}`,
-          initial: initial,
-          onConfirm: (sel, totalCaj, pesoTotal) => {
-            actualizarRowConCajones(idx, sel, totalCaj, pesoTotal);
-            actualizarFaltanteAuto(row);
-          }
-        });
+    const inputCaj = row.querySelector(".input-cajones");
+    if (inputCaj) {
+      inputCaj.addEventListener("input", () => {
+        inputCaj.value = inputCaj.value.replace(/\D/g, "");
+      });
+      inputCaj.addEventListener("change", () => {
+        const totalCaj = parseInt(inputCaj.value, 10) || 0;
+        actualizarRowConCajones(idx, {}, totalCaj, 0);
+        actualizarFaltanteAuto(row);
+      });
+    }
+
+    // Input Kg neto (unificado Fase 1)
+    const inputKg = row.querySelector(".input-kg");
+    if (inputKg) {
+      inputKg.addEventListener("input", () => {
+        inputKg.value = inputKg.value.replace(/[^0-9,.\-]/g, "");
+      });
+      inputKg.addEventListener("change", () => {
+        registrarKgFila(idx, inputKg.value);
       });
     }
 
@@ -658,6 +902,14 @@ function renderizarFase1() {
     if (popupBtn) {
       popupBtn.addEventListener("click", () => {
         abrirPopupOnlinePS(row.dataset.sp, row.dataset.parte);
+      });
+    }
+
+    // Botón Tandas (T)
+    const tandaBtn = row.querySelector('[data-action="tandas"]');
+    if (tandaBtn) {
+      tandaBtn.addEventListener("click", () => {
+        abrirTandasFila(idx);
       });
     }
   });
@@ -689,12 +941,30 @@ function abrirPopupOnlinePS(sp, parte) {
   overlay.querySelector("#popupTitle").textContent = `Online PS — ${parte} (${sp})`;
   const body = overlay.querySelector("#popupBody");
   if (!items.length) {
-    body.innerHTML = `<div class="popup-line">Sin cajones online en ningún PS</div>`;
+    body.innerHTML = `<div class="popup-line">Sin stock online en ningún PS</div>`;
   } else {
-    const total = items.reduce((s, x) => s + x.caj, 0);
-    body.innerHTML = items.map(x =>
-      `<div class="popup-line"><b>${escapeHtml(x.ps)}</b>: ${Math.round(x.caj)} caj</div>`
-    ).join("") + `<div class="popup-line popup-total"><b>Total: ${Math.round(total)} caj</b></div>`;
+    // Por PS: si cargaPorUnidades → "X uni"; si sinCajones → "X kg"; else → "X kg — Y caj"
+    const lineas = items.map(x => {
+      const porUni = Boolean(cargaPorUniMap.get(x.ps));
+      const sinCaj = Boolean(sinCajonesMap.get(x.ps));
+      let valTxt;
+      if (porUni) valTxt = `${Math.round(x.uni)} uni`;
+      else if (sinCaj) valTxt = `${formatKg(x.kg)} kg`;
+      else valTxt = `${formatKg(x.kg)} kg — ${Math.round(x.caj)} caj`;
+      return `<div class="popup-line"><b>${escapeHtml(x.ps)}</b>: ${valTxt}</div>`;
+    });
+    // Totales separados según tipo
+    const totalKg = items.reduce((s, x) => s + (cargaPorUniMap.get(x.ps) ? 0 : x.kg), 0);
+    const totalUni = items.reduce((s, x) => s + (cargaPorUniMap.get(x.ps) ? x.uni : 0), 0);
+    const totalCaj = items.reduce((s, x) => s + ((sinCajonesMap.get(x.ps) || cargaPorUniMap.get(x.ps)) ? 0 : x.caj), 0);
+    const hayKg = items.some(x => !cargaPorUniMap.get(x.ps));
+    const hayUni = items.some(x => cargaPorUniMap.get(x.ps));
+    const hayCaj = items.some(x => !sinCajonesMap.get(x.ps) && !cargaPorUniMap.get(x.ps));
+    const partes = [];
+    if (hayKg) partes.push(`${formatKg(totalKg)} kg`);
+    if (hayUni) partes.push(`${Math.round(totalUni)} uni`);
+    if (hayCaj) partes.push(`${Math.round(totalCaj)} caj`);
+    body.innerHTML = lineas.join("") + `<div class="popup-line popup-total"><b>Total: ${partes.join(" — ")}</b></div>`;
   }
   overlay.classList.remove("hidden");
 }
@@ -725,18 +995,6 @@ function actualizarRowConCajones(idx, sel, totalCaj, pesoTotal) {
   const row = rows[idx];
   if (!row) return;
   row.dataset.cajones = totalCaj;
-  row.dataset.pesoCajones = pesoTotal;
-
-  const trigger = row.querySelector('[data-action="popup-cajones"]');
-  if (trigger) {
-    if (totalCaj > 0) {
-      trigger.classList.add("has-sel");
-      trigger.innerHTML = `${totalCaj} caj<span class="sub">${pesoTotal.toLocaleString('es-AR',{maximumFractionDigits:2})} kg</span>`;
-    } else {
-      trigger.classList.remove("has-sel");
-      trigger.innerHTML = '📦 Cargar';
-    }
-  }
 
   // Persistir en buffer
   const buf = getBuffer();
@@ -747,6 +1005,7 @@ function actualizarRowConCajones(idx, sel, totalCaj, pesoTotal) {
 
   if (totalCaj > 0) {
     const prevKg = bufIdx >= 0 ? (buf[bufIdx].kg || "") : "";
+    const prevTandas = bufIdx >= 0 && Array.isArray(buf[bufIdx].tandas) ? buf[bufIdx].tandas : [];
     const newItem = {
       ps: selectedPS,
       parte: item.parte,
@@ -757,7 +1016,8 @@ function actualizarRowConCajones(idx, sel, totalCaj, pesoTotal) {
       cajonesSel: sel,
       pesoCajones: pesoTotal,
       faltante: faltante,
-      kg: prevKg
+      kg: prevKg,
+      tandas: prevTandas
     };
     if (bufIdx >= 0) buf[bufIdx] = newItem;
     else buf.push(newItem);
@@ -767,8 +1027,8 @@ function actualizarRowConCajones(idx, sel, totalCaj, pesoTotal) {
   saveBuffer(buf);
 }
 
-// Para PSs sin_cajones (Charcas, AJ Adhesivos) — guardar valor directo (kg o unidades)
-// directamente desde Fase 1. Saltea popup y Fase 2.
+// Para PSs sin_cajones (Charcas) — guardar valor directo (kg) directamente desde Fase 1.
+// Saltea popup y Fase 2.
 function registrarCambioFila1Directo(idx) {
   const item = fetchedItems[idx];
   if (!item) return;
@@ -804,6 +1064,162 @@ function registrarCambioFila1Directo(idx) {
   saveBuffer(buf);
 }
 
+// Popup confirmación: muestra items a enviar + totales. Devuelve Promise<bool>
+function mostrarConfirmacionEnvio(items) {
+  return new Promise(resolve => {
+    let overlay = document.getElementById("confirmEnvioOverlay");
+    if (!overlay) {
+      overlay = document.createElement("div");
+      overlay.id = "confirmEnvioOverlay";
+      overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:2000;padding:16px";
+      overlay.innerHTML = `
+        <div style="background:#fff;border-radius:14px;width:min(640px,100%);max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.3);overflow:hidden">
+          <div style="background:#111;color:#fff;padding:14px 18px;font-weight:800;font-size:17px">Confirmar Envío</div>
+          <div id="confirmEnvioBody" style="padding:14px 18px;overflow-y:auto;flex:1"></div>
+          <div style="padding:12px 18px;display:flex;justify-content:flex-end;gap:10px;border-top:1px solid #e5e7eb">
+            <button id="confirmEnvioCancel" type="button" style="background:#fff;color:#111;border:2px solid #d0d7de;border-radius:10px;padding:10px 20px;font-weight:800;cursor:pointer;font-size:15px">Cancelar</button>
+            <button id="confirmEnvioOk" type="button" style="background:#111;color:#fff;border:0;border-radius:10px;padding:10px 24px;font-weight:800;cursor:pointer;font-size:15px">✓ Confirmar Envío</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(overlay);
+    }
+    const body = document.getElementById("confirmEnvioBody");
+    let totCaj = 0, totKg = 0, totUni = 0;
+    // Header dinamico segun tipo PS
+    const labelCaj = sinCajones ? (cargaPorUnidades ? "Unidades" : "—") : "Cajones Enviados";
+    const labelKg = sinCajones ? (cargaPorUnidades ? "—" : "Kg Neto") : "Kg Neto";
+    const rows = items.map(it => {
+      const caj = Number(it.cajones) || 0;
+      const kg = parseDecimal(it.kg);
+      const uni = Number(it.unidades) || 0;
+      totCaj += caj; totKg += kg; totUni += uni;
+      const cajCell = sinCajones
+        ? (cargaPorUnidades ? `<b>${uni}</b>` : `—`)
+        : `<b>${caj}</b>`;
+      const kgCell = sinCajones
+        ? (cargaPorUnidades ? `—` : `<b>${kg.toLocaleString('es-AR',{maximumFractionDigits:2})}</b>`)
+        : `<b>${kg.toLocaleString('es-AR',{maximumFractionDigits:2})}</b>`;
+      return `<tr>
+        <td style="padding:8px 14px;border:1px solid #d0d7de;text-align:center;white-space:nowrap">${escapeHtml(it.parte)}</td>
+        <td style="padding:8px 14px;border:1px solid #d0d7de;text-align:center;white-space:nowrap">${escapeHtml(it.sp || it.sc || "")}</td>
+        <td style="padding:8px 14px;border:1px solid #d0d7de;text-align:center;white-space:nowrap">${cajCell}</td>
+        <td style="padding:8px 14px;border:1px solid #d0d7de;text-align:center;white-space:nowrap">${kgCell}</td>
+      </tr>`;
+    }).join("");
+    const totCajTxt = sinCajones
+      ? (cargaPorUnidades ? `<b>${totUni}</b>` : `—`)
+      : `<b>${totCaj}</b>`;
+    const totKgTxt = sinCajones
+      ? (cargaPorUnidades ? `—` : `<b>${totKg.toLocaleString('es-AR',{maximumFractionDigits:2})}</b>`)
+      : `<b>${totKg.toLocaleString('es-AR',{maximumFractionDigits:2})}</b>`;
+    body.innerHTML = `
+      <div style="font-weight:700;margin-bottom:10px;color:#555;font-size:15px;text-align:center">${items.length} artículo${items.length>1?'s':''} a <b style="color:#111">${escapeHtml(selectedPS)}</b></div>
+      <div style="display:flex;justify-content:center">
+        <table style="width:auto;border-collapse:collapse;font-size:16px;table-layout:auto">
+          <thead><tr style="background:#f3f4f6">
+            <th style="padding:8px 14px;border:1px solid #d0d7de;text-align:center;white-space:nowrap;font-size:15px">Descripción</th>
+            <th style="padding:8px 14px;border:1px solid #d0d7de;text-align:center;white-space:nowrap;font-size:15px">Sector</th>
+            <th style="padding:8px 14px;border:1px solid #d0d7de;text-align:center;white-space:nowrap;font-size:15px">${labelCaj}</th>
+            <th style="padding:8px 14px;border:1px solid #d0d7de;text-align:center;white-space:nowrap;font-size:15px">${labelKg}</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    `;
+    overlay.style.display = "flex";
+    const cleanup = () => { overlay.style.display = "none"; };
+    document.getElementById("confirmEnvioOk").onclick = () => { cleanup(); resolve(true); };
+    document.getElementById("confirmEnvioCancel").onclick = () => { cleanup(); resolve(false); };
+    overlay.onclick = (e) => { if (e.target === overlay) { cleanup(); resolve(false); } };
+  });
+}
+
+// Abre popup de tandas para una fila
+function abrirTandasFila(idx) {
+  const item = fetchedItems[idx];
+  if (!item) return;
+  const buf = getBuffer();
+  const bufKey = `${selectedPS}__${item.sc}__${item.parte}`;
+  const bufIdx = buf.findIndex(b => `${b.ps}__${b.sc}__${b.parte}` === bufKey);
+  let tandasIni = (bufIdx >= 0 && Array.isArray(buf[bufIdx].tandas)) ? buf[bufIdx].tandas : [];
+  // Si no hay tandas pero hay valores cargados a mano → preload como tanda 1
+  if (tandasIni.length === 0 && bufIdx >= 0) {
+    const caj = Number(buf[bufIdx].cajones) || 0;
+    const kg = parseDecimal(buf[bufIdx].kg);
+    if (caj > 0 || kg > 0) {
+      tandasIni = [{ caj, kg, uni: 0 }];
+    }
+  }
+  window.tandasPopup.open({
+    titulo: `Tandas — ${item.parte}`,
+    initial: tandasIni,
+    pedirCaj: true,
+    pedirKg: true,
+    pedirUni: false,
+    onConfirm: (tandas, totales) => {
+      // Persistir tandas en el buffer. Cajones y kg quedan como totales.
+      const buf2 = getBuffer();
+      const bufIdx2 = buf2.findIndex(b => `${b.ps}__${b.sc}__${b.parte}` === bufKey);
+      if (tandas.length === 0 && totales.caj === 0 && totales.kg === 0) {
+        // Sin tandas válidas: limpiar entrada si existe
+        if (bufIdx2 >= 0) {
+          buf2[bufIdx2].tandas = [];
+          buf2[bufIdx2].cajones = 0;
+          buf2[bufIdx2].kg = "";
+          // Si quedó todo en 0, remover entrada
+          if (!Number(buf2[bufIdx2].unidades || 0)) buf2.splice(bufIdx2, 1);
+          saveBuffer(buf2);
+        }
+      } else {
+        const newItem = bufIdx2 >= 0 ? buf2[bufIdx2] : {
+          ps: selectedPS,
+          parte: item.parte,
+          proceso: item.proceso,
+          sc: item.sc,
+          sp: item.sp,
+          faltante: false
+        };
+        newItem.tandas = tandas;
+        newItem.cajones = totales.caj;
+        newItem.kg = totales.kg > 0 ? String(totales.kg) : "";
+        if (bufIdx2 >= 0) buf2[bufIdx2] = newItem;
+        else buf2.push(newItem);
+        saveBuffer(buf2);
+      }
+      // Re-render fase 1 para reflejar totales
+      renderizarFase1();
+    }
+  });
+}
+
+// Persistir Kg en el buffer cuando el operario lo carga en Fase 1 unificada
+function registrarKgFila(idx, rawValue) {
+  const item = fetchedItems[idx];
+  if (!item) return;
+  const num = parseDecimal(rawValue);
+  const buf = getBuffer();
+  const bufKey = `${selectedPS}__${item.sc}__${item.parte}`;
+  const bufIdx = buf.findIndex(b => `${b.ps}__${b.sc}__${b.parte}` === bufKey);
+  if (bufIdx >= 0) {
+    buf[bufIdx].kg = num > 0 ? String(num) : "";
+    saveBuffer(buf);
+  } else if (num > 0) {
+    // No habia entrada (no se cargaron cajones aun), igual guardar kg
+    buf.push({
+      ps: selectedPS,
+      parte: item.parte,
+      proceso: item.proceso,
+      sc: item.sc,
+      sp: item.sp,
+      cajones: 0,
+      kg: String(num),
+      faltante: false
+    });
+    saveBuffer(buf);
+  }
+}
+
 // Solo se usa para refrescar el flag faltante en el buffer cuando el operador toca el F box.
 // Las cajones se persisten via actualizarRowConCajones (popup confirm).
 function registrarCambioFila1(idx) {
@@ -822,141 +1238,55 @@ function registrarCambioFila1(idx) {
   }
 }
 
-function renderizarFase2() {
-  const buf = getBuffer();
-  // Mapeo con indice ORIGINAL del buffer, luego filtra por PS (para que data-buf-idx apunte a la posicion real en localStorage)
-  const itemsConCaj = buf
-    .map((b, originalIdx) => ({ ...b, _idx: originalIdx }))
-    .filter(b => b.ps === selectedPS && Number(b.cajones) > 0);
-
-  const ph = cargaPorUnidades ? "0" : "0,0";
-  const im = cargaPorUnidades ? "numeric" : "decimal";
-
-  fase2TableBody.innerHTML = itemsConCaj.map(item => {
-    const i = item._idx;
-    const pesoCaj = Number(item.pesoCajones) || 0;
-    const kgBruto = Number(item.kgBruto) || (item.kg ? parseDecimal(item.kg) + pesoCaj : 0);
-    const kgNeto = Math.max(0, kgBruto - pesoCaj);
-    return `
-      <tr data-buf-idx="${i}">
-        <td>${escapeHtml(item.parte)}</td>
-        <td>${escapeHtml(item.proceso)}</td>
-        <td>${escapeHtml(item.sc)}</td>
-        <td class="right"><b>${item.cajones}</b><br><span class="kg-caj">${pesoCaj.toLocaleString('es-AR',{maximumFractionDigits:2})} kg caj</span></td>
-        <td class="right"><input type="text" inputmode="${im}" class="cell-input input-kg-fase2" data-buf-idx="${i}" placeholder="${ph}" value="${kgBruto ? formatNumKg(kgBruto) : ''}" autocomplete="off"></td>
-        <td class="right kg-neto-cell" data-buf-idx="${i}"><b>${kgNeto ? formatNumKg(kgNeto) : '—'}</b></td>
-      </tr>
-    `;
-  }).join("");
-
-  fase2TableBody.querySelectorAll(".input-kg-fase2").forEach(input => {
-    input.addEventListener("input", () => {
-      input.value = cargaPorUnidades
-        ? input.value.replace(/\D/g, "")
-        : input.value.replace(/[^0-9,.\-]/g, "");
-      recalcularKgNeto(input);
-      validarFase2Completa();
-    });
-    input.addEventListener("change", () => {
-      const idx = Number(input.dataset.bufIdx);
-      const buf = getBuffer();
-      if (buf[idx]) {
-        const bruto = parseDecimal(input.value);
-        const pesoCaj = Number(buf[idx].pesoCajones) || 0;
-        buf[idx].kgBruto = bruto;
-        buf[idx].kg = String(Math.max(0, bruto - pesoCaj));
-      }
-      localStorage.setItem(BUFFER_KEY, JSON.stringify(buf));
-      validarFase2Completa();
-    });
-  });
-
-  validarFase2Completa();
-}
-
 function formatNumKg(n) {
   return Number(n || 0).toLocaleString('es-AR', { minimumFractionDigits: 0, maximumFractionDigits: 3 });
 }
 
-function recalcularKgNeto(input) {
-  const idx = Number(input.dataset.bufIdx);
-  const buf = getBuffer();
-  if (!buf[idx]) return;
-  const bruto = parseDecimal(input.value);
-  const pesoCaj = Number(buf[idx].pesoCajones) || 0;
-  const neto = Math.max(0, bruto - pesoCaj);
-  const cell = fase2TableBody.querySelector(`.kg-neto-cell[data-buf-idx="${idx}"] b`);
-  if (cell) cell.textContent = neto ? formatNumKg(neto) : '—';
-}
-
-function validarFase2Completa() {
-  const inputs = fase2TableBody.querySelectorAll(".input-kg-fase2");
-  const todosLlenos = Array.from(inputs).every(input => {
-    const val = input.value.trim();
-    return val && parseDecimal(val) > 0;
-  });
-  btnEnviar.disabled = !todosLlenos;
-  btnEnviar.classList.toggle("disabled", !todosLlenos);
-}
-
-btnSiguiente.addEventListener("click", () => {
-  const buf = getBuffer();
-  const itemsPS = buf.filter(b => b.ps === selectedPS && (
-    Number(b.cajones) > 0 || Number(b.unidades) > 0 || parseDecimal(b.kg) > 0
-  ));
-  if (!itemsPS.length) {
-    alert("Cargá al menos un artículo");
-    return;
-  }
-  if (sinCajones) {
-    // PS sin cajones (Charcas/AJ): el valor ya está en Fase 1, enviar directo
-    btnEnviar.click();
-  } else {
-    renderizarFase2();
-    mostrarFase(2);
-  }
-});
-
-btnVolverFase1.addEventListener("click", () => {
-  mostrarFase(1);
-});
-
 btnEnviar.addEventListener("click", async () => {
-  // Defensivo: persistir cualquier valor del DOM que no se haya commiteado por change (ej. usuario clickea Enviar sin perder focus del input)
-  const inputsActuales = fase2TableBody.querySelectorAll(".input-kg-fase2");
-  if (inputsActuales.length) {
-    const bufAct = getBuffer();
-    inputsActuales.forEach(input => {
-      const idx = Number(input.dataset.bufIdx);
-      if (Number.isInteger(idx) && bufAct[idx]) {
-        const bruto = parseDecimal(input.value);
-        const pesoCaj = Number(bufAct[idx].pesoCajones) || 0;
-        bufAct[idx].kgBruto = bruto;
-        // Si carga por unidades: el valor es unidades, no kg. No restamos pesoCaj.
-        if (cargaPorUnidades) {
-          bufAct[idx].kg = String(input.value || "").trim();
-        } else {
-          bufAct[idx].kg = String(Math.max(0, bruto - pesoCaj));
-        }
+  // Defensivo: persistir valores del DOM por si el operario clickea Enviar sin perder focus.
+  // Skip inputs READONLY (tienen tandas — el valor mostrado es derivado y se perdería).
+  fase1TableBody.querySelectorAll(".input-cajones, .input-kg, .input-directo").forEach(input => {
+    if (input.readOnly) return;
+    if (input.classList.contains("input-cajones")) {
+      const row = input.closest("tr");
+      const idx = Number(row?.dataset.idx);
+      if (Number.isInteger(idx)) {
+        const totalCaj = parseInt(input.value, 10) || 0;
+        if (totalCaj > 0) actualizarRowConCajones(idx, {}, totalCaj, 0);
       }
-    });
-    localStorage.setItem(BUFFER_KEY, JSON.stringify(bufAct));
-  }
+    } else if (input.classList.contains("input-kg")) {
+      const row = input.closest("tr");
+      const idx = Number(row?.dataset.idx);
+      if (Number.isInteger(idx)) registrarKgFila(idx, input.value);
+    } else if (input.classList.contains("input-directo")) {
+      const row = input.closest("tr");
+      const idx = Number(row?.dataset.idx);
+      if (Number.isInteger(idx)) registrarCambioFila1Directo(idx);
+    }
+  });
 
   const buf = getBuffer();
   const itemsConCaj = buf.filter(b => b.ps === selectedPS && (
     Number(b.cajones) > 0 || Number(b.unidades) > 0 || parseDecimal(b.kg) > 0
   ));
 
-  // Para PSs con cajones (no sinCajones): validar que tengan kg/uni cargado en Fase 2
+  if (!itemsConCaj.length) {
+    alert("Cargá al menos un artículo");
+    return;
+  }
+
+  // Para PSs con cajones (no sinCajones): validar que tengan kg cargado para cada fila con cajones
   if (!sinCajones) {
-    const faltanKg = itemsConCaj.filter(b => !(parseDecimal(b.kg) > 0 || Number(b.unidades) > 0));
+    const faltanKg = itemsConCaj.filter(b => Number(b.cajones) > 0 && !(parseDecimal(b.kg) > 0));
     if (faltanKg.length) {
-      const etiqueta = cargaPorUnidades ? "Unidades" : "Kg";
-      alert("Por favor ingresa " + etiqueta + " para todos los artículos");
+      alert("Falta cargar Kg neto para: " + faltanKg.map(b => b.parte).join(", "));
       return;
     }
   }
+
+  // Confirmación visual antes de insertar
+  const confirmado = await mostrarConfirmacionEnvio(itemsConCaj);
+  if (!confirmado) return;
 
   btnEnviar.disabled = true;
   const textOriginal = btnEnviar.textContent;
@@ -982,8 +1312,10 @@ btnEnviar.addEventListener("click", async () => {
         "Proceso": item.proceso || ""
       };
       if (cargaPorUnidades) {
-        // PS con carga_por_unidades=TRUE (ej. AJ Adhesivos): guardar en Unidades, KG queda null
-        base["Unidades"] = parseInt(item.kg, 10) || 0;
+        // PS con carga_por_unidades=TRUE (Charcas, AJ Adhesivos): guardar en Unidades, KG queda null
+        // Para sinCajones (input directo Fase 1) el valor queda en item.unidades.
+        // Para flujo normal con cargaPorUnidades el operario lo carga como "kg" en Fase 2.
+        base["Unidades"] = parseInt(item.unidades || item.kg, 10) || 0;
       } else {
         base["KG"] = parseDecimal(item.kg);
       }
@@ -1018,6 +1350,28 @@ btnVolver.addEventListener("click", () => {
   statusEl.textContent = "Selecciona un proveedor para continuar.";
 });
 
+// Botón Limpiar: vacía todo lo cargado (cajones, kg, tandas) del PS actual
+const btnLimpiar = document.getElementById("btnLimpiar");
+if (btnLimpiar) {
+  btnLimpiar.addEventListener("click", () => {
+    const buf = getBuffer();
+    const tieneAlgo = buf.some(b => b.ps === selectedPS && (
+      Number(b.cajones) > 0 || Number(b.unidades) > 0 || parseDecimal(b.kg) > 0 ||
+      (Array.isArray(b.tandas) && b.tandas.length > 0)
+    ));
+    if (!tieneAlgo) {
+      alert("No hay nada cargado para limpiar.");
+      return;
+    }
+    if (!confirm("¿Vaciar todo lo cargado para " + selectedPS + "? (cajones, kg, tandas)")) return;
+    // Eliminar entradas del PS actual
+    const restante = buf.filter(b => b.ps !== selectedPS);
+    localStorage.setItem(BUFFER_KEY, JSON.stringify(restante));
+    actualizarBtnEnviar();
+    renderizarFase1();
+  });
+}
+
 btnVolverPS.addEventListener("click", () => {
   selectedPS = "";
   fetchedItems = [];
@@ -1037,9 +1391,15 @@ async function init() {
     mostrarFase(0);
     statusEl.textContent = "Selecciona un proveedor para continuar.";
 
+    // Auto-seleccionar PS si viene ?ps=X en la URL (desde envios-only-ps.html)
+    const params = new URLSearchParams(window.location.search);
+    const psParam = params.get("ps");
+    if (psParam && availablePS.includes(psParam)) {
+      await seleccionarPS(psParam);
+    }
+
     // Precarga en background datos para "Cajones sugeridos"
     precargarDatosStock().then(() => {
-      // Si el usuario ya entro a fase 1, re-render para mostrar los sugeridos
       if (currentPhase === 1 && selectedPS && fetchedItems.length) {
         renderizarFase1();
       }

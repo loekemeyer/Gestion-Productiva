@@ -1,0 +1,166 @@
+/* tandas-popup.css — popup de tandas reutilizable */
+
+.tandas-overlay{
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.5);
+  display: none;
+  align-items: center; justify-content: center;
+  z-index: 1500;
+  padding: 16px;
+}
+.tandas-overlay.open{ display: flex; }
+
+.tandas-modal{
+  background: #fff;
+  border-radius: 14px;
+  width: min(560px, 100%);
+  max-height: 90vh;
+  display: flex; flex-direction: column;
+  box-shadow: 0 20px 60px rgba(0,0,0,.3);
+  overflow: hidden;
+}
+
+.tandas-head{
+  background: #111;
+  color: #fff;
+  padding: 14px 18px;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.tandas-head .titulo{
+  font-weight: 800;
+  font-size: 16px;
+}
+.tandas-head .close-btn{
+  background: #fff;
+  color: #111;
+  border: 0;
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.tandas-body{
+  padding: 16px 18px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.tanda-row{
+  display: grid;
+  grid-template-columns: 50px 1fr 1fr 1fr 40px;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid #e5e7eb;
+}
+.tanda-row .num{
+  font-weight: 800;
+  color: #555;
+  font-size: 14px;
+}
+.tanda-row input{
+  height: 38px;
+  border: 2px solid #d0d7de;
+  border-radius: 8px;
+  padding: 0 10px;
+  font-size: 16px;
+  text-align: center;
+  font-weight: 700;
+  width: 100%;
+}
+.tanda-row input:focus{ border-color: #111; outline: none; }
+.tanda-row .del-btn{
+  background: #fee2e2;
+  color: #b91c1c;
+  border: 0;
+  border-radius: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  font-weight: 800;
+  font-size: 14px;
+}
+.tanda-row .del-btn:hover{ background: #fecaca; }
+
+.tandas-headers{
+  display: grid;
+  grid-template-columns: 50px 1fr 1fr 1fr 40px;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 2px solid #111;
+  font-weight: 800;
+  font-size: 13px;
+  color: #444;
+  text-align: center;
+}
+
+.tandas-add-row{
+  display: flex;
+  justify-content: center;
+  margin: 12px 0 0;
+}
+.tandas-add-btn{
+  background: #fff;
+  color: #111;
+  border: 2px dashed #111;
+  border-radius: 10px;
+  padding: 10px 20px;
+  font-weight: 800;
+  cursor: pointer;
+  font-size: 14px;
+}
+.tandas-add-btn:hover{ background: #f3f4f6; }
+
+.tandas-totales{
+  background: #f3f4f6;
+  border-top: 2px solid #111;
+  padding: 14px 18px;
+  display: grid;
+  grid-template-columns: 50px 1fr 1fr 1fr 40px;
+  gap: 8px;
+  font-weight: 800;
+  font-size: 16px;
+  text-align: center;
+}
+.tandas-totales .lbl{ text-align: left; padding-left: 8px; }
+
+.tandas-footer{
+  padding: 12px 18px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  border-top: 1px solid #e5e7eb;
+}
+.tandas-footer .btn-ok{
+  background: #111;
+  color: #fff;
+  border: 0;
+  border-radius: 10px;
+  padding: 10px 24px;
+  font-weight: 800;
+  cursor: pointer;
+  font-size: 15px;
+}
+
+/* Trigger button (icono + en celda de fila) */
+.tanda-trigger{
+  background: #fff;
+  border: 2px solid #111;
+  border-radius: 6px;
+  width: 32px; height: 32px;
+  font-weight: 800; font-size: 16px;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}
+.tanda-trigger:hover{ background: #f3f4f6; }
+.tanda-trigger.has-tandas{
+  background: #fef3c7;
+  border-color: #d97706;
+}
+
+/* Cell con tandas: input read-only marca distinta */
+.input-with-tandas{
+  background: #fef3c7 !important;
+  cursor: not-allowed;
+}

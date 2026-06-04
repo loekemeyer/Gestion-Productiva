@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <script src="../auth-guard.js"></script>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Control Envíos y Entregas</title>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <link rel="stylesheet" href="styles.css?v=20260603b" />
+</head>
+<body>
+
+  <div class="card">
+
+    <button onclick="window.location.href='../Inicio/index.html'" class="btn-home">← Volver al inicio</button>
+
+    <h1>Control Envíos y Entregas</h1>
+
+    <!-- PASO 1: Origen -->
+    <div class="step">
+      <div class="step-label">1. Origen</div>
+      <div class="btn-group" id="grpOrigen">
+        <button type="button" class="opt" data-val="ps">Prov. Servicios</button>
+        <button type="button" class="opt" data-val="tall">Talleristas</button>
+        <button type="button" class="opt" data-val="insumos">Prov. Insumos</button>
+      </div>
+    </div>
+
+    <!-- PASO 1a: Rubro (solo cuando Origen=Insumos) -->
+    <div class="step hidden" id="stepRubro">
+      <div class="step-label">Rubro</div>
+      <div class="btn-group" id="grpRubro"></div>
+    </div>
+
+    <!-- PASO 1b: Proveedor / Tallerista -->
+    <div class="step hidden" id="stepNombre">
+      <div class="step-label" id="labelNombre">Proveedor / Tallerista</div>
+      <select id="selNombre" class="sel-nombre">
+        <option value="__todos__">Todos</option>
+      </select>
+    </div>
+
+    <!-- PASO 2: Tipo -->
+    <div class="step">
+      <div class="step-label">2. Tipo</div>
+      <div class="btn-group" id="grpTipo">
+        <button type="button" class="opt" data-val="envios">Envíos</button>
+        <button type="button" class="opt" data-val="entregas">Entregas</button>
+      </div>
+    </div>
+
+    <!-- PASO 3: Fecha -->
+    <div class="step">
+      <div class="step-label">3. Fecha</div>
+      <div class="fecha-modos">
+        <label class="radio"><input type="radio" name="modoFecha" value="mes" checked /> Mes específico</label>
+        <label class="radio"><input type="radio" name="modoFecha" value="rango" /> Rango</label>
+      </div>
+      <div class="fecha-inputs">
+        <div id="boxMes" class="fbox">
+          <input type="month" id="inMes" />
+        </div>
+        <div id="boxRango" class="fbox hidden">
+          <label>Desde <input type="date" id="inDesde" /></label>
+          <label>Hasta <input type="date" id="inHasta" /></label>
+        </div>
+      </div>
+    </div>
+
+    <!-- PASO 4: Medida -->
+    <div class="step">
+      <div class="step-label">4. Medida</div>
+      <div class="btn-group" id="grpMedida">
+        <button type="button" class="opt active" data-val="default">Kg / Unidades</button>
+        <button type="button" class="opt" data-val="cajas">Cajas</button>
+      </div>
+    </div>
+
+    <div class="step">
+      <button type="button" id="btnGenerar" class="btn-generar">Generar</button>
+    </div>
+
+    <div id="status" class="status"></div>
+    <div id="result"></div>
+
+  </div>
+
+  <script src="app.js?v=20260603c"></script>
+</body>
+</html>

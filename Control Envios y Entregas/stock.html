@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <script src="../auth-guard.js"></script>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Stock Online — Control Envíos y Entregas</title>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <link rel="stylesheet" href="styles.css?v=20260603b" />
+  <link rel="stylesheet" href="stock.css?v=20260603h" />
+</head>
+<body>
+
+  <div class="card">
+
+    <div class="head-actions">
+      <button onclick="window.location.href='../Inicio/index.html'" class="btn-home">← Volver al inicio</button>
+    </div>
+
+    <h1>Stock Online — Prov. Servicios + Talleristas</h1>
+
+    <!-- Tabs Origen -->
+    <div class="step">
+      <div class="step-label">Origen</div>
+      <div class="btn-group" id="grpOrigen">
+        <button type="button" class="opt active" data-val="ps">Prov. Servicios</button>
+        <button type="button" class="opt" data-val="tall">Talleristas</button>
+      </div>
+    </div>
+
+    <!-- Fecha hasta -->
+    <div class="step">
+      <div class="step-label">Hasta fecha</div>
+      <div class="fbox">
+        <input type="date" id="inHasta" />
+        <button type="button" class="opt" id="btnHoy">Hoy</button>
+      </div>
+    </div>
+
+    <!-- Selector Prov/Tall específico -->
+    <div class="step">
+      <div class="step-label" id="labelNombre">Proveedor / Tallerista</div>
+      <select id="selNombre" class="sel-nombre">
+        <option value="__todos__">Todos</option>
+      </select>
+    </div>
+
+    <!-- Filtros texto -->
+    <div class="report-tools">
+      <input type="text" id="filtroDesc" class="filtro-input" placeholder="Filtrar por descripción..." />
+      <input type="text" id="filtroSector" class="filtro-input" placeholder="Filtrar por sector..." />
+      <span id="filtroCount" class="filtro-count"></span>
+      <button type="button" id="btnToggleIni" class="btn-imprimir">👁 Ocultar Stock Inicial</button>
+      <button type="button" id="btnRefresh" class="btn-imprimir">⟳ Recargar</button>
+      <button type="button" id="btnImprimir" class="btn-imprimir">🖨 Imprimir</button>
+    </div>
+
+    <div id="status" class="status"></div>
+    <div id="result"></div>
+
+  </div>
+
+  <!-- Popup detalle envios/entregas -->
+  <div id="popupOverlay" class="popup-overlay hidden">
+    <div class="popup-box">
+      <div class="popup-head">
+        <div id="popupTitle" class="popup-title"></div>
+        <button id="popupClose" type="button" class="popup-close">✕</button>
+      </div>
+      <div id="popupBody" class="popup-body"></div>
+    </div>
+  </div>
+
+  <script src="stock.js?v=20260603p"></script>
+</body>
+</html>

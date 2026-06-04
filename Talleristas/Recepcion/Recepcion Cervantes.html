@@ -2,6 +2,8 @@
 <html lang="es">
 <head>
 <script src="../../auth-guard.js"></script>
+<link rel="stylesheet" href="../../tandas-popup.css?v=20260604a">
+<script src="../../tandas-popup.js?v=20260604a"></script>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Recepción (test)</title>
@@ -45,9 +47,13 @@
   .grid.con-unidades{
     grid-template-columns:130px 110px 110px minmax(260px,1fr);
   }
+  .grid.con-grj-cajas{
+    grid-template-columns:130px 110px 110px 40px minmax(260px,1fr);
+  }
   .grid .h{font-weight:900;font-size:16px;color:#333}
   .grid input[data-role="cajas"],
-  .grid input[data-role="kg-grj"]{
+  .grid input[data-role="kg-grj"],
+  .grid input[data-role="cajas-grj"]{
     width:100% !important;
     min-width:0;
     height:44px;
@@ -158,6 +164,8 @@
       <div class="h">Código</div>
       <div class="h" id="modalCajasHeader">Cajas</div>
       <div class="h" id="modalUnidadesHeader" class="hidden">Unidades</div>
+      <div class="h" id="modalCajasGrjHeader" class="hidden">Cajas</div>
+      <div class="h" id="modalTandaHeader" class="hidden" title="Tandas">T</div>
       <div class="h">Descripción</div>
     </div>
 
@@ -167,6 +175,7 @@
 
     <div class="modal-actions">
       <button id="cancelModal" class="xbtn btn-secondary" type="button">Cancelar</button>
+      <button id="btnLimpiarRec" class="xbtn btn-secondary" type="button" title="Vaciar todo lo cargado">🗑 Limpiar</button>
       <button id="sendModal" class="xbtn btn-primary" type="button">Enviar</button>
     </div>
 
@@ -183,7 +192,7 @@
   const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhyeGZjdHpuY2l4eHFtcGZoc2t2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI3MjQyNjEsImV4cCI6MjA4ODMwMDI2MX0.4L6wguch8UZGhC2VpzrWcCjJGUV-IkYsl9JoCWrOLUs";
 
   const PARTES_TABLE = "Partes x Tallerista";
-  const ENTREGAS_TABLE = "Entregas Tallerista Virgilio";
+  const ENTREGAS_TABLE = "Entregas Tallerista Cervantes";
 
   const WEBAPP_BASE = "https://script.google.com/macros/s/AKfycbz3jZ7oahGOULPWKnTJGTTh_HIpLpyILu8tWkNHg6U_r5s7R3osFh3cQV5G7FUq8oXs/exec";
 
@@ -679,17 +688,30 @@
       hdrUnidades.classList.toggle("hidden", !esCarlos);
     }
 
+    // Header extra "Cajas" para GRJ Kg (Lucho, etc): operario carga Kg + Cajas manualmente.
+    const hdrCajasGrj = document.getElementById("modalCajasGrjHeader");
+    if (hdrCajasGrj) {
+      hdrCajasGrj.classList.toggle("hidden", !(hayGrj && !esCarlos));
+    }
+    // Header T (tandas) — solo cuando hay GRJ Kg
+    const hdrTanda = document.getElementById("modalTandaHeader");
+    if (hdrTanda) {
+      hdrTanda.classList.toggle("hidden", !(hayGrj && !esCarlos));
+    }
+
     if (modalGridHeader) {
       modalGridHeader.classList.toggle("con-unidades", esCarlos);
+      modalGridHeader.classList.toggle("con-grj-cajas", hayGrj && !esCarlos);
     }
 
     linesWrap.classList.toggle("con-unidades", esCarlos);
+    linesWrap.classList.toggle("con-grj-cajas", hayGrj && !esCarlos);
 
     if (hintEl) {
       if (esCarlos) {
         hintEl.textContent = "Tip: completá Kg y Unidades por artículo.";
       } else if (hayGrj) {
-        hintEl.textContent = "Tip: completá Kg por artículo (se permite decimal).";
+        hintEl.textContent = "Tip: completá Kg + Cajas por artículo (Kg decimal, Cajas entero).";
       } else if (todosTrans) {
         hintEl.textContent = "Tip: completá unidades por artículo. Solo acepta números enteros.";
       } else {
@@ -767,6 +789,58 @@
         linesWrap.appendChild(uni);
       }
 
+      // Para GRJ Kg (Lucho, etc): agregar input Cajas manual (no esCarlos)
+      if (esGrj && !esCarlosInput){
+        const cajGrj = document.createElement("input");
+        cajGrj.type = "text";
+        cajGrj.inputMode = "numeric";
+        cajGrj.placeholder = "0 caj";
+        cajGrj.setAttribute("data-role", "cajas-grj");
+        cajGrj.setAttribute("data-idx", String(i));
+
+        cajGrj.addEventListener("input", () => {
+          cajGrj.value = cajGrj.value.replace(/\D/g, "");
+        });
+
+        cajGrj.addEventListener("keydown", (e) => {
+          if (e.key === "Enter"){
+            e.preventDefault();
+            const next = linesWrap.querySelector(`input[data-role="kg-grj"][data-idx="${i + 1}"]`);
+            if (next) next.focus();
+          }
+        });
+
+        linesWrap.appendChild(cajGrj);
+
+        // Botón T (tandas) — solo para GRJ Kg (Lucho, etc)
+        const tandaBtn = document.createElement("button");
+        tandaBtn.type = "button";
+        const tandaArr = tandasByIdxRec[i] || [];
+        const hayTandasRow = tandaArr.length > 0;
+        tandaBtn.className = "tanda-trigger" + (hayTandasRow ? " has-tandas" : "");
+        tandaBtn.textContent = hayTandasRow ? String(tandaArr.length) : "+";
+        tandaBtn.title = "Cargar por tandas";
+        tandaBtn.setAttribute("data-role", "tanda-btn");
+        tandaBtn.setAttribute("data-idx", String(i));
+        tandaBtn.addEventListener("click", () => abrirTandasFilaRec(i, item));
+        linesWrap.appendChild(tandaBtn);
+
+        // Si hay tandas, marcar kg/cajas como readonly con totales
+        if (hayTandasRow){
+          const totCaj = tandaArr.reduce((s, t) => s + (Number(t.caj) || 0), 0);
+          const totKg = tandaArr.reduce((s, t) => {
+            const n = parseFloat(String(t.kg || "0").replace(",", "."));
+            return s + (Number.isFinite(n) ? n : 0);
+          }, 0);
+          kg.value = String(totKg);
+          kg.readOnly = true;
+          kg.classList.add("input-with-tandas");
+          cajGrj.value = String(totCaj);
+          cajGrj.readOnly = true;
+          cajGrj.classList.add("input-with-tandas");
+        }
+      }
+
       const desc = document.createElement("div");
       desc.className = "descCell";
       desc.textContent = item.desc || "";
@@ -778,6 +852,110 @@
     if (firstKg) firstKg.focus();
   }
 
+  // Tandas (memoria efímera del modal) — solo aplica a GRJ Kg
+  const tandasByIdxRec = {};
+
+  function abrirTandasFilaRec(idx, item){
+    let initial = tandasByIdxRec[idx] || [];
+    // Preload desde inputs cargados a mano
+    if (initial.length === 0){
+      const kgIn = linesWrap.querySelector(`input[data-role="kg-grj"][data-idx="${idx}"]`);
+      const cajIn = linesWrap.querySelector(`input[data-role="cajas-grj"][data-idx="${idx}"]`);
+      const kg = parseFloat(String(kgIn?.value || "0").replace(",", ".")) || 0;
+      const caj = parseInt(cajIn?.value, 10) || 0;
+      if (kg > 0 || caj > 0) initial = [{ caj, kg, uni: 0 }];
+    }
+    window.tandasPopup.open({
+      titulo: `Tandas — ${item.desc || item.codigo}`,
+      initial,
+      pedirCaj: true,
+      pedirKg: true,
+      pedirUni: false,
+      onConfirm: (tandas, totales) => {
+        if (tandas.length === 0 && totales.caj === 0 && totales.kg === 0){
+          delete tandasByIdxRec[idx];
+          // Limpiar inputs
+          const kgIn = linesWrap.querySelector(`input[data-role="kg-grj"][data-idx="${idx}"]`);
+          const cajIn = linesWrap.querySelector(`input[data-role="cajas-grj"][data-idx="${idx}"]`);
+          if (kgIn){ kgIn.value = ""; kgIn.readOnly = false; kgIn.classList.remove("input-with-tandas"); }
+          if (cajIn){ cajIn.value = ""; cajIn.readOnly = false; cajIn.classList.remove("input-with-tandas"); }
+        } else {
+          tandasByIdxRec[idx] = tandas;
+          const kgIn = linesWrap.querySelector(`input[data-role="kg-grj"][data-idx="${idx}"]`);
+          const cajIn = linesWrap.querySelector(`input[data-role="cajas-grj"][data-idx="${idx}"]`);
+          if (kgIn){ kgIn.value = String(totales.kg); kgIn.readOnly = true; kgIn.classList.add("input-with-tandas"); }
+          if (cajIn){ cajIn.value = String(totales.caj); cajIn.readOnly = true; cajIn.classList.add("input-with-tandas"); }
+        }
+        // Actualizar texto del botón T
+        const btn = linesWrap.querySelector(`button[data-role="tanda-btn"][data-idx="${idx}"]`);
+        if (btn){
+          const arr = tandasByIdxRec[idx] || [];
+          btn.textContent = arr.length > 0 ? String(arr.length) : "+";
+          btn.classList.toggle("has-tandas", arr.length > 0);
+        }
+      }
+    });
+  }
+
+  // Popup confirmación Recepción Cervantes
+  function mostrarConfirmacionRecepcion(items, esCarlos){
+    return new Promise(resolve => {
+      let overlay = document.getElementById("confirmRecepcionOverlay");
+      if (!overlay){
+        overlay = document.createElement("div");
+        overlay.id = "confirmRecepcionOverlay";
+        overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:2500;padding:16px";
+        overlay.innerHTML = `
+          <div style="background:#fff;border-radius:14px;width:min(720px,100%);max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.3);overflow:hidden">
+            <div style="background:#111;color:#fff;padding:14px 18px;font-weight:800;font-size:17px">Confirmar Recepción</div>
+            <div id="confirmRecepcionBody" style="padding:14px 18px;overflow-y:auto;flex:1"></div>
+            <div style="padding:12px 18px;display:flex;justify-content:flex-end;gap:10px;border-top:1px solid #e5e7eb">
+              <button id="confirmRecepcionCancel" type="button" style="background:#fff;color:#111;border:2px solid #d0d7de;border-radius:10px;padding:10px 20px;font-weight:800;cursor:pointer;font-size:15px">Cancelar</button>
+              <button id="confirmRecepcionOk" type="button" style="background:#111;color:#fff;border:0;border-radius:10px;padding:10px 24px;font-weight:800;cursor:pointer;font-size:15px">✓ Confirmar Recepción</button>
+            </div>
+          </div>
+        `;
+        document.body.appendChild(overlay);
+      }
+      const body = document.getElementById("confirmRecepcionBody");
+      const rows = items.map(it => {
+        const isGrj = esGrjRealKg(it.codigo);
+        const isTrans = esTransUnidades(it.codigo);
+        let cantidad = "";
+        if (esCarlos) cantidad = `<b>${it.kg}</b> kg · <b>${it.unidades}</b> uni`;
+        else if (isGrj) cantidad = `<b>${it.cajasGrj || 0}</b> caj · <b>${it.kg}</b> kg`;
+        else if (isTrans) cantidad = `<b>${it.cajas}</b> uni`;
+        else cantidad = `<b>${it.cajas}</b> cajas`;
+        return `<tr>
+          <td style="padding:8px 14px;border:1px solid #d0d7de;text-align:center;white-space:nowrap"><b>${esc(it.codigo)}</b></td>
+          <td style="padding:8px 14px;border:1px solid #d0d7de;text-align:center;white-space:nowrap">${esc(it.desc || "")}</td>
+          <td style="padding:8px 14px;border:1px solid #d0d7de;text-align:center;white-space:nowrap">${cantidad}</td>
+        </tr>`;
+      }).join("");
+      body.innerHTML = `
+        <div style="font-weight:700;margin-bottom:10px;color:#555;font-size:15px;text-align:center">${items.length} artículo${items.length>1?'s':''} de <b style="color:#111">${esc(tallerista)}</b></div>
+        <div style="display:flex;justify-content:center">
+          <table style="width:auto;border-collapse:collapse;font-size:16px;table-layout:auto">
+            <thead><tr style="background:#f3f4f6">
+              <th style="padding:8px 14px;border:1px solid #d0d7de;text-align:center;white-space:nowrap;font-size:15px">Código</th>
+              <th style="padding:8px 14px;border:1px solid #d0d7de;text-align:center;white-space:nowrap;font-size:15px">Descripción</th>
+              <th style="padding:8px 14px;border:1px solid #d0d7de;text-align:center;white-space:nowrap;font-size:15px">Cantidad</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      `;
+      overlay.style.display = "flex";
+      const cleanup = () => { overlay.style.display = "none"; };
+      document.getElementById("confirmRecepcionOk").onclick = () => { cleanup(); resolve(true); };
+      document.getElementById("confirmRecepcionCancel").onclick = () => { cleanup(); resolve(false); };
+      overlay.onclick = (e) => { if (e.target === overlay){ cleanup(); resolve(false); } };
+    });
+  }
+
+  // Helper esc local (HTML escape) si no existe
+  function esc(s){ return String(s == null ? "" : s).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;"); }
+
   function getItemsFromModal(){
   const codes = Array.from(linesWrap.querySelectorAll('input[data-role="codigo"]'));
   const esCarlos = tallerista === "CARLOS";
@@ -785,11 +963,13 @@
   return codes.map((c, i) => {
     const cajasEl  = linesWrap.querySelector(`input[data-role="cajas"][data-idx="${i}"]`);
     const kgGrjEl  = linesWrap.querySelector(`input[data-role="kg-grj"][data-idx="${i}"]`);
+    const cajasGrjEl = linesWrap.querySelector(`input[data-role="cajas-grj"][data-idx="${i}"]`);
     const kgCarlosEl = linesWrap.querySelector(`input[data-role="kg-carlos"][data-idx="${i}"]`);
     const unidadesEl = linesWrap.querySelector(`input[data-role="unidades"][data-idx="${i}"]`);
 
     const cajasStr = cajasEl  ? cajasEl.value.trim()  : "";
     const kgGrjStr = kgGrjEl  ? kgGrjEl.value.trim() : "";
+    const cajasGrjStr = cajasGrjEl ? cajasGrjEl.value.trim() : "";
     const kgCarlosStr = kgCarlosEl ? kgCarlosEl.value.trim() : "";
     const unidadesStr = unidadesEl ? unidadesEl.value.trim() : "";
 
@@ -798,6 +978,7 @@
     return {
       codigo: String(c.value || "").trim(),
       cajas: cajasStr,
+      cajasGrj: cajasGrjStr,
       kg:    kgGrjStr || kgCarlosStr,
       unidades: unidadesStr,
       desc:  String(itemBase.desc || "").trim()
@@ -865,6 +1046,29 @@
   closeModal.onclick = () => { if (!isSubmitting) closeModalFn(); };
   cancelModal.onclick = () => { if (!isSubmitting) closeModalFn(); };
 
+  // Botón Limpiar — vaciar inputs y tandas del modal actual
+  const btnLimpiarRec = document.getElementById("btnLimpiarRec");
+  if (btnLimpiarRec){
+    btnLimpiarRec.onclick = () => {
+      if (isSubmitting) return;
+      if (!confirm("¿Vaciar todos los datos cargados del modal?")) return;
+      // Limpiar inputs
+      linesWrap.querySelectorAll('input[data-role="cajas"], input[data-role="kg-grj"], input[data-role="cajas-grj"], input[data-role="kg-carlos"], input[data-role="unidades"]').forEach(inp => {
+        inp.value = "";
+        inp.readOnly = false;
+        inp.classList.remove("input-with-tandas");
+      });
+      // Limpiar tandas
+      Object.keys(tandasByIdxRec).forEach(k => delete tandasByIdxRec[k]);
+      // Reset botones T
+      linesWrap.querySelectorAll('button[data-role="tanda-btn"]').forEach(btn => {
+        btn.textContent = "+";
+        btn.classList.remove("has-tandas");
+      });
+      modalMsg.textContent = "";
+    };
+  }
+
   overlay.addEventListener("click", (e) => {
     if (!isSubmitting && e.target === overlay) closeModalFn();
   });
@@ -912,29 +1116,7 @@
     }
 
     const esCarlos = tallerista === "CARLOS";
-    const detalle = items
-      .map(it => {
-        if (esCarlos){
-          return `${it.codigo} - ${it.desc} - ${it.kg} kg - ${it.unidades} uni`;
-        }
-        if (esGrjRealKg(it.codigo)){
-          const kg = Number(it.kg) || 0;
-          const kgxuniGrj = GRJ_PESOS[it.codigo] || 0;
-          const units = kgxuniGrj > 0 ? Math.round(kg / kgxuniGrj) : 0;
-          return `${it.codigo} - ${it.desc} - ${it.kg} kg (≈ ${units} uni)`;
-        }
-        if (esTransUnidades(it.codigo)){
-          // Transformacion 1:1: descuenta el componente, mismo nro de unidades
-          const compList = (GRJ_COMPONENTES[it.codigo] || []).join(", ");
-          return `${it.codigo} - ${it.desc} - ${it.cajas} uni (descuenta ${compList || "—"})`;
-        }
-        return `${it.codigo} - ${it.desc} - ${it.cajas} cajas`;
-      })
-      .join("\n");
-
-    const ok = confirm(
-      `¿Está seguro con las cantidades?\n\n${detalle}`
-    );
+    const ok = await mostrarConfirmacionRecepcion(items, esCarlos);
     if (!ok) return;
 
     lastSendCode = genNumericCode(4);
@@ -1005,14 +1187,14 @@
           if (sbErr) throw new Error("Error guardando en Supabase: " + sbErr.message);
         }
 
-        // Para items GRJ: calcular unidades y registrar cada componente
-        // Cajas = unidades calculadas (Kg / KgxUni_GRJ), Cod_GRJ y Kg_GRJ para trazabilidad
+        // Para items GRJ: usar Cajas del input manual del operario (campo cajasGrj).
+        // Antes se calculaba units = Math.round(Kg / KgxUni_GRJ); ahora es input directo.
+        // Cod_GRJ y Kg_GRJ siguen para trazabilidad.
         if (grjItems.length){
           const registrosGrj = [];
           grjItems.forEach(it => {
-            const kg         = Number(it.kg) || 0;
-            const kgxuniGrj  = GRJ_PESOS[it.codigo] || 0;
-            const units      = kgxuniGrj > 0 ? Math.round(kg / kgxuniGrj) : 0;
+            const kg    = Number(it.kg) || 0;
+            const units = Number(it.cajasGrj) || 0;
             (GRJ_COMPONENTES[it.codigo] || []).forEach(comp => {
               registrosGrj.push({
                 "Nombre_Tall": formatName(tallerista),

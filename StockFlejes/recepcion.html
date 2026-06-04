@@ -152,11 +152,31 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const PROVEEDORES = {
   Flejes: ["Basconia","Aperam","Hermac","Brawin","Altrak","Szapiro","EstaMetal","JL Metales","Alami"],
   Cajas: ["Corrugadora"],
-  Plasticos: ["Pat Bet Plast","Rodar","Telleria","Maspoli","Pintos","Martin Faccolo","JL Matriceria","Capuchon Mariposa","Base Afila","M. Pelador","Terrero","Mangos Abrelata","Regatones","Bujes Abrelatas","Mango Ergon.","Mangos NM","Packaging y Serv"],
+  Plasticos: ["Pat Bet Plast","Rodar","Telleria","Maspoli","Pintos","Martin Faccolo","JL Matriceria","Capuchon Mariposa","Base Afila","M. Pelador","Terrero","Mangos Abrelata","Regatones","Bujes Abrelatas","Mango Ergon.","Mangos NM","Packaging y Serv","Sesega","Barbeja"],
   Cartones: ["Grafica Pol"],
   Remaches: ["Bella Vista","Dilmax","Electronica Mandelli","Imel"],
   Bombillas: ["Por definir"]
 };
+
+// Unidad por rubro (default) + excepciones por proveedor
+// Tipos: "Kg" (decimal), "Uni" (entero), "Millares" (entero), "Litros" (decimal), "Cajas" (entero)
+const UNIDADES = {
+  Flejes:    { _default: "Kg" },
+  Cajas:     { _default: "Cajas" },
+  Cartones:  { _default: "Uni" },
+  Plasticos: { _default: "Uni", "Martin Faccolo": "Kg", "Sesega": "Kg", "Barbeja": "Uni" },
+  Remaches:  { _default: "Millares", "Dilmax": "Litros" },
+  Bombillas: { _default: "Uni" }
+};
+
+function getUnidad(rubro, prov) {
+  const cfg = UNIDADES[rubro] || {};
+  return cfg[prov] || cfg._default || "Uni";
+}
+
+function esDecimal(unidad) {
+  return unidad === "Kg" || unidad === "Litros";
+}
 
 // Tablas fuente por rubro
 const TABLAS = {
@@ -309,6 +329,12 @@ function buildModal() {
   linesWrap.innerHTML = "";
   modalMsg.textContent = "";
 
+  const unidad = getUnidad(rubroSel, provSel);
+  const decimal = esDecimal(unidad);
+  // Mostrar unidad en el header de la columna Cantidad
+  const hdrCant = document.querySelector('#overlay .grid .h:nth-child(2)');
+  if (hdrCant) hdrCant.textContent = `Cantidad (${unidad})`;
+
   items.forEach((item, i) => {
     const code = document.createElement("input");
     code.type = "text";
@@ -318,16 +344,21 @@ function buildModal() {
 
     const cant = document.createElement("input");
     cant.type = "text";
-    cant.inputMode = "numeric";
-    cant.placeholder = "0";
+    cant.inputMode = decimal ? "decimal" : "numeric";
+    cant.placeholder = decimal ? "0,0" : "0";
     cant.setAttribute("data-role", "cant");
     cant.setAttribute("data-idx", String(i));
     cant.value = item._cant || "";
 
     cant.addEventListener("input", () => {
-      cant.value = cant.value.replace(/\D/g, "");
+      if (decimal) {
+        // Permite digitos + una sola coma o punto
+        cant.value = cant.value.replace(/[^0-9.,]/g, "").replace(/([.,].*)[.,]/g, "$1");
+      } else {
+        cant.value = cant.value.replace(/\D/g, "");
+      }
       items[i]._cant = cant.value;
-      cant.classList.toggle("has-val", cant.value !== "" && cant.value !== "0");
+      cant.classList.toggle("has-val", cant.value !== "" && cant.value !== "0" && Number(cant.value.replace(",", ".")) > 0);
     });
 
     cant.addEventListener("keydown", e => {
@@ -362,14 +393,17 @@ overlay.addEventListener("click", e => { if (e.target === overlay) closeModalFn(
 
 // ===== Enviar =====
 document.getElementById("sendModal").addEventListener("click", async () => {
-  const toSend = items.filter(it => it._cant && Number(it._cant) > 0);
+  const unidad = getUnidad(rubroSel, provSel);
+  const parseCant = (s) => Number(String(s || "").replace(",", ".")) || 0;
+
+  const toSend = items.filter(it => parseCant(it._cant) > 0);
   if (!toSend.length) {
     modalMsg.textContent = "Completá al menos una cantidad.";
     modalMsg.className = "status bad";
     return;
   }
 
-  const resumen = toSend.map(it => `${it.codigo}: ${it._cant}`).join("\n");
+  const resumen = toSend.map(it => `${it.codigo}: ${it._cant} ${unidad}`).join("\n");
   if (!confirm(`Registrar recepción de ${provSel}?\n\n${resumen}`)) return;
 
   const sendBtn = document.getElementById("sendModal");
@@ -385,8 +419,8 @@ document.getElementById("sendModal").addEventListener("click", async () => {
       rubro: rubroSel,
       codigo: it.codigo,
       descripcion: it.descripcion,
-      cantidad: Number(it._cant),
-      unidad: rubroSel === "Cajas" ? "Cajas" : "Uni",
+      cantidad: parseCant(it._cant),
+      unidad: unidad,
       remito: remito || null
     }));
 
