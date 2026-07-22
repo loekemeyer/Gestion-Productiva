@@ -302,8 +302,17 @@ function renderTalleristas(lista){
 
 function seleccionarTallerista(nombre){
   talleristaActivo = nombre;
-  renderTalleristas([nombre]);
+  // Ocultar grilla de talleristas (no mostramos pill seleccionado)
+  const grid = document.getElementById("talleristasGrid");
+  if (grid) grid.classList.add("hidden");
+  // Cambiar título: "Envios a <Tallerista>"
+  const h1 = document.querySelector(".header-top h1");
+  if (h1) h1.textContent = `Envios a ${nombre}`;
   btnVolver.classList.remove("hidden");
+  const enviarBar = document.getElementById("enviarBar");
+  if (enviarBar) enviarBar.classList.remove("hidden");
+  const btnEnv = document.getElementById("btnEnviar");
+  if (btnEnv) btnEnv.classList.remove("hidden");
   if (txtFiltroArticulo) { txtFiltroArticulo.value = ""; }
   if (filtroArticuloWrap) { filtroArticuloWrap.classList.remove("hidden"); }
   buscar(nombre);
@@ -313,6 +322,16 @@ async function volverALista(){
   talleristaActivo = "";
   resultEl.innerHTML = "";
   btnVolver.classList.add("hidden");
+  const enviarBar = document.getElementById("enviarBar");
+  if (enviarBar) enviarBar.classList.add("hidden");
+  const btnEnv = document.getElementById("btnEnviar");
+  if (btnEnv) btnEnv.classList.add("hidden");
+  // Restaurar título
+  const h1 = document.querySelector(".header-top h1");
+  if (h1) h1.textContent = "Envios por Tallerista";
+  // Mostrar grilla de talleristas de nuevo
+  const grid = document.getElementById("talleristasGrid");
+  if (grid) grid.classList.remove("hidden");
   btnSiguiente.disabled = true; btnSiguiente.classList.add("disabled");
   if (txtFiltroArticulo) { txtFiltroArticulo.value = ""; }
   if (filtroArticuloWrap) { filtroArticuloWrap.classList.add("hidden"); }

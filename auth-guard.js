@@ -23,6 +23,7 @@
       // Tall
       'talleristas/envios/enviostall.html',
       'talleristas/recepcion/recepcion cervantes.html',
+      'talleristas/recepcion/devolucion cervantes.html',
       // Prov Serv
       'prov serv/envios/enviosps.html',
       'prov serv/entregas/entregaps.html',

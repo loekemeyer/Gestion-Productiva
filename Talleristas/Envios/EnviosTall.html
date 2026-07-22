@@ -10,7 +10,7 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
   <!-- CSS -->
-  <link rel="stylesheet" href="EnviosTall.css" />
+  <link rel="stylesheet" href="EnviosTall.css?v=20260617a" />
   <link rel="stylesheet" href="../../cajones-popup.css?v=20260528a" />
   <link rel="stylesheet" href="../../tandas-popup.css?v=20260604a" />
 </head>
@@ -33,14 +33,14 @@
 
     <!-- FASE 1: UNIFICADA — CAJONES + KG NETO + UNI -->
     <div id="fase1" class="fase-container">
-      <div class="fase-header" style="justify-content:flex-end;margin-bottom:8px;gap:10px">
+      <div id="enviarBar" class="fase-header hidden" style="justify-content:flex-end;margin-bottom:8px;gap:10px">
         <label style="font-weight:800;font-size:14px;display:flex;align-items:center;gap:6px">
           Fecha:
           <input type="date" id="fechaEnvio" style="height:38px;border-radius:10px;border:2px solid #d0d7de;padding:0 10px;font-size:14px">
         </label>
         <button id="btnLimpiar" class="btn-volver-fases" type="button" title="Vaciar todo lo cargado">🗑 Limpiar</button>
-        <button id="btnEnviar" class="btn-enviar disabled" type="button" disabled>Enviar</button>
       </div>
+      <button id="btnEnviar" class="btn-enviar btn-enviar-big disabled hidden" type="button" disabled>Enviar cambios</button>
       <div id="talleristasGrid" class="talleristas-grid"></div>
       <div id="filtroArticuloWrap" class="filtro-articulo-wrap hidden">
         <input type="search" id="txtFiltroArticulo" class="filtro-articulo-input" placeholder="Buscar artículo..." autocomplete="off">
@@ -89,7 +89,7 @@
   <!-- JS -->
   <script src="../../cajones-popup.js?v=20260528a"></script>
   <script src="../../tandas-popup.js?v=20260604a"></script>
-  <script src="EnviosTall.js?v=20260604d"></script>
+  <script src="EnviosTall.js?v=20260605c"></script>
 
 </body>
 </html>

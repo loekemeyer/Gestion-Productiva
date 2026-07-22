@@ -157,25 +157,136 @@ function escapeHtml(value) {
 let procesoPorPSMapEnt = new Map();
 let psPorProcesoMapEnt = new Map();
 
+// ===== Datos de stock (Online SP / Online PS) — portado de EnviosPS =====
+const parseDecimal = parseDecimalEPS;
+let stockDataCache = null;
+let stockDataPromise = null;
+
+function normalizeText(value) {
+  return String(value || "").trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ");
+}
+function normalizeCod3(value) {
+  let s = String(value || "").trim().toUpperCase();
+  if (!s) return "";
+  const m = s.match(/^(\d+)(.*)$/);
+  if (!m) return s;
+  return `${m[1].padStart(3, "0")}${String(m[2] || "").trim().toUpperCase()}`;
+}
+async function cargarTablaPaginada(tabla, filtros) {
+  const all = [];
+  const PAGE = 1000;
+  let from = 0;
+  while (true) {
+    let q = sb.from(tabla).select("*").range(from, from + PAGE - 1);
+    if (filtros) filtros.forEach(f => { q = q.neq(f.col, f.val); });
+    const { data, error } = await q;
+    if (error) throw new Error(`${tabla}: ${error.message}`);
+    if (!data || !data.length) break;
+    all.push(...data);
+    if (data.length < PAGE) break;
+    from += PAGE;
+  }
+  return all;
+}
+async function precargarDatosStock() {
+  if (stockDataCache) return stockDataCache;
+  if (stockDataPromise) return stockDataPromise;
+  stockDataPromise = (async () => {
+    const [spKgRows, entregasPSRows, enviosTallRows, enviosAPSRows, entregasLogRows, despieceRows, causaEfectoRows, dbEspejoRows] = await Promise.all([
+      sb.from("SP Kg").select("*").then(r => r.data || []),
+      cargarTablaPaginada("Entregas PS"),
+      cargarTablaPaginada("Envios a Talleristas"),
+      cargarTablaPaginada("Envios a PS"),
+      cargarTablaPaginada("Entregas_Tall_Todas").then(r => r.filter(x => {
+        const cod = String(x["Codigo_Tall"] || "").trim();
+        const nom = String(x["Nombre_Tall"] || "").trim().toLowerCase();
+        return cod === "0001" || nom.includes("log");
+      })),
+      sb.from("Despiece x Articulo").select('"COD","Sector Proce"').then(r => r.data || []),
+      sb.from("Causa-Efecto").select("*").then(r => r.data || []),
+      cargarTablaPaginada("db_n8n_espejo", [{ col: "Legajo", val: "1" }])
+    ]);
+    const spSet = new Set();
+    const kgXUniMap = new Map();
+    const kgXCajonMap = new Map();
+    const mvBySP = new Map();
+    spKgRows.forEach(r => {
+      const sp = String(r["Sp"] || "").trim();
+      if (!sp) return;
+      const key = normalizeText(sp);
+      const kgCaj = parseDecimal(r["KG x Cajon"] || r["KG Cajon"] || 0);
+      const kgU = parseDecimal(r["Kg X Uni"] || 0);
+      const stockIni = parseDecimal(r["Stock Inicial"] || 0);
+      const maxCaj = parseDecimal(r["Max Cajon SP Cerv"] || 0);
+      spSet.add(sp.toUpperCase());
+      kgXCajonMap.set(key, kgCaj);
+      if (kgU > 0) kgXUniMap.set(sp.toUpperCase(), kgU);
+      mvBySP.set(key, { maxCajCerv: maxCaj, onlineCaj: kgCaj > 0 ? stockIni / kgCaj : 0 });
+    });
+    entregasPSRows.forEach(r => { const k = normalizeText(r["Sector SP"]); const caj = Number(r["Cajones"] || 0); if (k && caj) { const mv = mvBySP.get(k); if (mv) mv.onlineCaj += caj; } });
+    enviosAPSRows.forEach(r => { const k = normalizeText(r["Sector SC"]); const caj = Number(r["Cajones"] || 0); if (k && caj) { const mv = mvBySP.get(k); if (mv) mv.onlineCaj -= caj; } });
+    enviosTallRows.forEach(r => { const k = normalizeText(r["Sector"]); const caj = Number(r["Cajones"] || 0); if (k && caj) { const mv = mvBySP.get(k); if (mv) mv.onlineCaj -= caj; } });
+    const codToSector = new Map();
+    despieceRows.forEach(r => { const cod = normalizeCod3(r["COD"]); const sector = normalizeText(r["Sector Proce"]); if (cod && sector) codToSector.set(cod, sector); });
+    entregasLogRows.forEach(r => { const codN = normalizeCod3(r["Cod"]); const cajas = Number(r["Cajas"] || 0); if (!codN || !cajas) return; const sector = codToSector.get(codN); if (!sector) return; const mv = mvBySP.get(sector); if (mv) mv.onlineCaj -= cajas; });
+    const causaMap = new Map();
+    causaEfectoRows.forEach(r => {
+      const matriz = String(r["Matriz"] || "").trim();
+      if (!matriz) return;
+      const desc = String(r["Descuenta"] || "").trim().toUpperCase();
+      const aum = String(r["Aumenta"] || "").trim().toUpperCase();
+      if (!spSet.has(desc) && !spSet.has(aum)) return;
+      if (!causaMap.has(matriz)) causaMap.set(matriz, []);
+      causaMap.get(matriz).push({ descuenta: desc, aumenta: aum });
+    });
+    const prodMap = new Map();
+    dbEspejoRows.forEach(r => {
+      const matriz = String(r["Matriz"] || "").trim();
+      const uni = parseDecimal(r["Uni"]);
+      if (!matriz || !uni) return;
+      if (!causaMap.has(matriz)) return;
+      const key = `${matriz}|||${r["Mes"]}|||${r["Dia"]}|||${r["Legajo"]}`;
+      if (!prodMap.has(key)) prodMap.set(key, { matriz, uni: 0 });
+      prodMap.get(key).uni += uni;
+    });
+    for (const [, { matriz, uni }] of prodMap.entries()) {
+      (causaMap.get(matriz) || []).forEach(ef => {
+        if (spSet.has(ef.aumenta)) { const k = normalizeText(ef.aumenta); const kgU = kgXUniMap.get(ef.aumenta) || 0; const kgCaj = kgXCajonMap.get(k) || 0; if (kgCaj > 0) { const mv = mvBySP.get(k); if (mv) mv.onlineCaj += (uni * kgU) / kgCaj; } }
+        if (spSet.has(ef.descuenta)) { const k = normalizeText(ef.descuenta); const kgU = kgXUniMap.get(ef.descuenta) || 0; const kgCaj = kgXCajonMap.get(k) || 0; if (kgCaj > 0) { const mv = mvBySP.get(k); if (mv) mv.onlineCaj -= (uni * kgU) / kgCaj; } }
+      });
+    }
+    const onlinePSCajGlobalBySP = new Map();
+    const add = (sp, caj, signo) => { if (sp && caj) onlinePSCajGlobalBySP.set(sp, (onlinePSCajGlobalBySP.get(sp) || 0) + caj * signo); };
+    enviosAPSRows.forEach(r => add(normalizeText(r["Sector SP"]), Number(r["Cajones"] || 0), +1));
+    entregasPSRows.forEach(r => add(normalizeText(r["Sector SP"]), Number(r["Cajones"] || 0), -1));
+    stockDataCache = { mvBySP, onlinePSCajGlobalBySP };
+    return stockDataCache;
+  })();
+  return stockDataPromise;
+}
+
 async function getPSDisponibles() {
   const [{ data, error }, { data: flagsData }] = await Promise.all([
     sb.from(SUPABASE_TABLE).select(COL_PS),
-    sb.from("Tall_ProvAT_PS").select("nombre, especializacion")
+    sb.from("Tall_ProvAT_PS").select("nombre, especializacion, ps")
   ]);
   if (error) throw error;
   procesoPorPSMapEnt = new Map();
+  const psOcultos = new Set(); // nombres con ps=false (no mostrar como Prov Serv)
   (flagsData || []).forEach(r => {
     const ps = String(r.nombre || "").trim();
     if (!ps) return;
     procesoPorPSMapEnt.set(ps, (r.especializacion && String(r.especializacion).trim()) || "Sin asignar");
+    if (r.ps === false) psOcultos.add(ps.toLowerCase());
   });
-  return uniqueSorted((data || []).map(r => r[COL_PS]));
+  return uniqueSorted((data || []).map(r => r[COL_PS]))
+    .filter(n => !psOcultos.has(String(n || "").trim().toLowerCase()));
 }
 
 async function getItemsPorPS(ps) {
   const { data, error } = await sb
     .from(SUPABASE_TABLE)
-    .select(`${COL_PS}, ${COL_PROCESO}, ${COL_PARTE}, ${COL_SC}, ${COL_SP}`)
+    .select(`${COL_PS}, ${COL_PROCESO}, ${COL_PARTE}, ${COL_SC}, ${COL_SP}, "Cod_Prov_Externo", "Cod_ISIS"`)
     .eq(COL_PS, ps)
     .order(COL_PROCESO, { ascending: true })
     .order(COL_PARTE, { ascending: true });
@@ -191,6 +302,8 @@ async function getItemsPorPS(ps) {
     const psVal = String(r[COL_PS] || "").trim();
     const sc = String(r[COL_SC] || "").trim();
     const sp = String(r[COL_SP] || "").trim();
+    const cod = String(r["Cod_Prov_Externo"] || "").trim();
+    const codIsis = String(r["Cod_ISIS"] || "").trim();
 
     if (!parte) return;
 
@@ -203,7 +316,9 @@ async function getItemsPorPS(ps) {
       proceso,
       parte,
       sc,
-      sp
+      sp,
+      cod,
+      codIsis
     });
   });
 
@@ -223,45 +338,86 @@ function renderPSButtons(values) {
     if (!psPorProcesoMapEnt.has(proc)) psPorProcesoMapEnt.set(proc, []);
     psPorProcesoMapEnt.get(proc).push(ps);
   });
+  // Merge: Cementado + Templado → "Cementado / Templado"
+  const cem = psPorProcesoMapEnt.get("Cementado") || [];
+  const tem = psPorProcesoMapEnt.get("Templado") || [];
+  if (cem.length || tem.length){
+    psPorProcesoMapEnt.set("Cementado / Templado", [...new Set([...cem, ...tem])]);
+    psPorProcesoMapEnt.delete("Cementado");
+    psPorProcesoMapEnt.delete("Templado");
+  }
   procesoSelEnt = null;
   renderProcesosEnt();
 }
 
-function renderProcesosEnt() {
-  psGrid.innerHTML = "";
-  const procs = [...psPorProcesoMapEnt.keys()].sort((a,b) => {
+const PS_DISPLAY_ALIAS_ENT = { "gaston almafuerte": "Almafuerte" };
+function aliasPS(n){ return PS_DISPLAY_ALIAS_ENT[String(n || "").trim().toLowerCase()] || n; }
+
+function setEntregaPSTitulo(txt){
+  const h1 = document.querySelector(".header-bar h1, .header-top h1, h1");
+  if (h1) h1.textContent = txt;
+}
+
+// Orden custom de procesos solicitado por logística
+const ORDEN_PROCESOS_ENT = [
+  "Cromado", "Pintado", "Niquelado", "Pavonado",
+  "Cementado / Templado",
+  "Serigrafiado", "Rectificado",
+  "Cortado", "Calado",
+  "Adhesivado", "Armado"
+];
+function ordenarProcesosEnt(arr){
+  const norm = s => String(s || "").trim().toLowerCase();
+  const idx = new Map(ORDEN_PROCESOS_ENT.map((p,i) => [norm(p), i]));
+  return [...arr].sort((a,b) => {
     if (a === "Sin asignar") return 1;
     if (b === "Sin asignar") return -1;
-    return a.localeCompare(b, "es");
+    const ia = idx.has(norm(a)) ? idx.get(norm(a)) : 999;
+    const ib = idx.has(norm(b)) ? idx.get(norm(b)) : 999;
+    if (ia !== ib) return ia - ib;
+    return String(a).localeCompare(String(b), "es");
   });
+}
+
+function renderProcesosEnt() {
+  setEntregaPSTitulo("Entrega de Proveedores de Servicios");
+  if (btnVolver) btnVolver.classList.add("hidden"); // en procesos no hay atras
+  backActionEnt = null;
+  psGrid.innerHTML = "";
+  const procs = ordenarProcesosEnt([...psPorProcesoMapEnt.keys()]);
   procs.forEach(proc => {
-    const cnt = psPorProcesoMapEnt.get(proc).length;
+    const provs = (psPorProcesoMapEnt.get(proc) || []).slice().sort((a,b) => a.localeCompare(b, "es"));
+    const provsArr = provs.map(aliasPS);
+    const provsHtml = provsArr.map(escapeHtml).join("<br>");
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "ps-pill proceso-pill";
-    btn.innerHTML = `${escapeHtml(proc)}<br><span style="font-size:11px;opacity:.75">${cnt} prov.</span>`;
+    btn.title = provsArr.join(", ");
+    btn.innerHTML = `${escapeHtml(proc)}<br><span style="font-size:12px;opacity:.85;font-weight:600">${provsHtml}</span>`;
     btn.addEventListener("click", () => {
       procesoSelEnt = proc;
-      renderPSDelProcesoEnt(proc);
+      // Si el proceso tiene un solo PS, ir directo
+      if (provs.length === 1) {
+        seleccionarPS(provs[0]);
+      } else {
+        renderPSDelProcesoEnt(proc);
+      }
     });
     psGrid.appendChild(btn);
   });
 }
 
 function renderPSDelProcesoEnt(proc) {
+  setEntregaPSTitulo(`Entrega · ${proc}`);
+  if (btnVolver) btnVolver.classList.remove("hidden"); // Atras → procesos
+  backActionEnt = () => renderProcesosEnt();
   psGrid.innerHTML = "";
-  const bar = document.createElement("div");
-  bar.style.cssText = "display:flex;align-items:center;gap:10px;width:100%;margin-bottom:10px";
-  bar.innerHTML = `<button type="button" class="ps-pill" style="background:#fff;color:#111;border:2px solid #d0d7de" id="psBackToProcEnt">← Procesos</button>
-    <div style="font-weight:800;color:#555;text-transform:uppercase;letter-spacing:1px">${escapeHtml(proc)}</div>`;
-  psGrid.appendChild(bar);
-  document.getElementById("psBackToProcEnt").addEventListener("click", () => renderProcesosEnt());
   const list = psPorProcesoMapEnt.get(proc) || [];
   list.sort((a,b) => a.localeCompare(b, "es")).forEach(ps => {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "ps-pill";
-    btn.textContent = ps;
+    btn.textContent = aliasPS(ps);
     btn.addEventListener("click", async () => {
       if (isSubmitting) return;
       await seleccionarPS(ps);
@@ -366,11 +522,34 @@ function renderTable(items) {
   });
 }
 
+// Acción del botón "Atras" del header, seteada por cada vista
+let backActionEnt = null;
+
+function goBackFromTableEnt(){
+  if (isSubmitting) return;
+  // Si entramos por familia (multi-familia PS) → volver a familias sin perder lo cargado
+  if (familiaSelEnt && itemsBasePSEnt.length > 0 && familiasPresentesEnt(itemsBasePSEnt).size > 1) {
+    familiaSelEnt = null;
+    fetchedItems = [];
+    selectedBadge.textContent = selectedPS;
+    tableTitle.textContent = selectedPS;
+    resultBody.innerHTML = "";
+    setTableMsg("");
+    hideSuccess();
+    showSelectionView();
+    setStatus("Seleccioná una familia para continuar.", "");
+    renderFamiliasEnt();
+    return;
+  }
+  resetAll();
+}
+
 function showSelectionView() {
   psGridWrap.classList.remove("hidden");
   detailWrap.classList.add("hidden");
   selectedBar.classList.add("hidden");
   btnEnviarCambios.classList.add("hidden");
+  if (btnVolver) btnVolver.classList.add("hidden");
 }
 
 function showDetailView() {
@@ -378,6 +557,8 @@ function showDetailView() {
   detailWrap.classList.remove("hidden");
   selectedBar.classList.remove("hidden");
   btnEnviarCambios.classList.remove("hidden");
+  if (btnVolver) btnVolver.classList.remove("hidden");
+  backActionEnt = goBackFromTableEnt;
 }
 
 function updateEnviarState() {
@@ -396,6 +577,10 @@ function updateEnviarState() {
 function resetAll() {
   selectedPS = "";
   fetchedItems = [];
+  itemsBasePSEnt = [];
+  familiaSelEnt = null;
+  clearEntregaBuf();
+  gruposAbiertosEnt = new Set();
   isSubmitting = false;
   lastSendCode = null;
 
@@ -409,9 +594,370 @@ function resetAll() {
   setStatus("Seleccioná un proveedor para continuar.", "bad");
   updateEnviarState();
 
-  psGrid.querySelectorAll(".ps-pill").forEach(btn => {
-    btn.classList.remove("active");
+  // Restaurar lista de PSs del proceso actual (psGrid puede estar mostrando familias)
+  if (typeof procesoSelEnt !== 'undefined' && procesoSelEnt && typeof renderPSDelProcesoEnt === 'function') {
+    renderPSDelProcesoEnt(procesoSelEnt);
+  } else if (typeof renderProcesosEnt === 'function') {
+    renderProcesosEnt();
+  } else {
+    psGrid.querySelectorAll(".ps-pill").forEach(btn => btn.classList.remove("active"));
+  }
+}
+
+// === Agrupado por familia (Pelador / Sacacorchos / Abrelatas / Otros) ===
+const FAMILIAS_ORDEN_ENT = ["Pelador", "Sacacorchos", "Abrelatas", "Otros"];
+// PSs que NO usan el paso de familias (van directo a la tabla completa)
+const PS_SIN_FAMILIAS_ENT = new Set(["pedernera"]);
+// PSs que usan agrupacion POR CODIGO (botones de 9 partes -> popup de entrega)
+const PS_POR_CODIGO_ENT = new Set(["pedernera"]);
+let itemsBasePSEnt = [];
+let familiaSelEnt = null;
+let gruposAbiertosEnt = new Set();
+let entregaBuf = {}; // buffer en memoria del flujo por codigo: key sc__parte -> {sc,parte,sp,proceso,cajones,kg,tandas}
+
+function clasificarFamiliaEnt(parte) {
+  const p = String(parte || '').toLowerCase();
+  if (/pelad|pelap/.test(p)) return 'Pelador';
+  if (/sacacorch|sac\s*comb|sac\s*mozo|sacatap|aleta|cabezal|destapacorona/.test(p)) return 'Sacacorchos';
+  if (/abrelat|maripos|varilla\s*c\/?\s*cuch|manija|mgo\s*plano|engranaje|cpo\s*u[ñn]a/.test(p)) return 'Abrelatas';
+  return 'Otros';
+}
+
+function familiasPresentesEnt(items) {
+  const s = new Set();
+  items.forEach(it => s.add(clasificarFamiliaEnt(it.parte || it.Parte)));
+  return s;
+}
+
+function renderFamiliasEnt() {
+  setEntregaPSTitulo(`Entrega de ${aliasPS(selectedPS)}`);
+  if (btnVolver) btnVolver.classList.remove("hidden"); // Atras → PS/procesos
+  backActionEnt = () => {
+    selectedPS = "";
+    itemsBasePSEnt = [];
+    fetchedItems = [];
+    familiaSelEnt = null;
+    const provs = procesoSelEnt ? (psPorProcesoMapEnt.get(procesoSelEnt) || []) : [];
+    if (procesoSelEnt && provs.length > 1) renderPSDelProcesoEnt(procesoSelEnt);
+    else { procesoSelEnt = null; renderProcesosEnt(); }
+  };
+  psGrid.innerHTML = "";
+  familiaSelEnt = null;
+  const counts = new Map();
+  itemsBasePSEnt.forEach(it => {
+    const f = clasificarFamiliaEnt(it.parte || it.Parte);
+    counts.set(f, (counts.get(f) || 0) + 1);
   });
+  FAMILIAS_ORDEN_ENT.forEach(fam => {
+    const cnt = counts.get(fam) || 0;
+    if (cnt === 0) return;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "ps-pill familia-pill";
+    btn.textContent = fam;
+    btn.addEventListener("click", () => seleccionarFamiliaEnt(fam));
+    psGrid.appendChild(btn);
+  });
+}
+
+function seleccionarFamiliaEnt(fam) {
+  familiaSelEnt = fam;
+  fetchedItems = itemsBasePSEnt.filter(it => clasificarFamiliaEnt(it.parte || it.Parte) === fam);
+  setEntregaPSTitulo(`Entrega de ${aliasPS(selectedPS)} · ${fam}`);
+  selectedBadge.textContent = `${selectedPS} · ${fam}`;
+  tableTitle.textContent = `${selectedPS} · ${fam}`;
+  renderTable(fetchedItems);
+  showDetailView();
+  setStatus("Proveedor cargado correctamente.", "ok");
+  setTableMsg("Completá solo cajones enteros mayores a 0.");
+  updateEnviarState();
+}
+
+// === Pedernera: un botón por item (código + descripción) + buscador → popup de entrega ===
+function clearEntregaBuf(){ entregaBuf = {}; }
+
+// Codigo a mostrar: el nuevo de ISIS (Cod_ISIS). Si la parte todavia no tiene, cae al viejo de 7 digitos.
+// Sin Cod_ISIS al 2026-07-15: 5160600, 5204600, 5206600, Plancha de Niquel, Destapador Pie Cromado.
+// Ver PROBLEMAS_CODIGOS_ISIS_2026-07-15.md en la raiz.
+function codMostrarEnt(item){ return item.codIsis || item.cod || "—"; }
+
+function renderGruposCodigoEnt() {
+  setEntregaPSTitulo(`Entrega de ${aliasPS(selectedPS)}`);
+  showSelectionView();
+  if (btnVolver) btnVolver.classList.remove("hidden");
+  gruposAbiertosEnt = new Set();
+  backActionEnt = () => {
+    clearEntregaBuf();
+    gruposAbiertosEnt = new Set();
+    selectedPS = ""; itemsBasePSEnt = []; fetchedItems = [];
+    const provs = procesoSelEnt ? (psPorProcesoMapEnt.get(procesoSelEnt) || []) : [];
+    if (procesoSelEnt && provs.length > 1) renderPSDelProcesoEnt(procesoSelEnt);
+    else { procesoSelEnt = null; renderProcesosEnt(); }
+  };
+  psGrid.innerHTML = "";
+
+  const buscador = document.createElement("div");
+  buscador.className = "item-buscador";
+  buscador.innerHTML = `<input type="search" id="buscadorItemsEnt" placeholder="Buscar por código o descripción..." autocomplete="off">
+    <label for="fechaEntregaGrupos">Fecha:</label><input type="date" id="fechaEntregaGrupos">`;
+  psGrid.appendChild(buscador);
+
+  const vacio = document.createElement("div");
+  vacio.id = "itemsVacioEnt";
+  vacio.className = "item-vacio hidden";
+  vacio.textContent = "Sin resultados para esa búsqueda.";
+  psGrid.appendChild(vacio);
+
+  const sorted = [...itemsBasePSEnt].sort((a,b)=>{ const ca=a.cod||"zzzzzzzz",cb=b.cod||"zzzzzzzz"; return ca.localeCompare(cb,"es",{numeric:true}); });
+  sorted.forEach(item => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "ps-pill item-cod-pill";
+    btn.dataset.key = `${item.sc}__${item.parte}`;
+    // Busca por codigo nuevo (ISIS) y por el viejo: durante la transicion los papeles traen cualquiera de los dos
+    btn.dataset.search = normalizeText(`${item.codIsis||""} ${item.cod||""} ${item.parte||""} ${item.sc||""}`);
+    btn.innerHTML = `<span class="ic-cod">${escapeHtml(codMostrarEnt(item))}</span><span class="ic-desc">${escapeHtml(item.parte||"")}</span>`;
+    btn.addEventListener("click", () => abrirPopupGrupoEntrega([item]));
+    psGrid.appendChild(btn);
+  });
+
+  const inputBuscar = buscador.querySelector("#buscadorItemsEnt");
+  inputBuscar.addEventListener("input", () => filtrarItemsEnt(inputBuscar.value));
+
+  const acciones = document.createElement("div");
+  acciones.className = "grupo-acciones";
+  acciones.innerHTML = `<button id="btnEnviarGruposEnt" class="btn-enviar" type="button">Enviar</button>`;
+  psGrid.appendChild(acciones);
+  const fInput = buscador.querySelector("#fechaEntregaGrupos");
+  if (fInput && !fInput.value) fInput.value = arDateISO();
+  acciones.querySelector("#btnEnviarGruposEnt").addEventListener("click", async (e) => {
+    const btnE = e.currentTarget;
+    const fecha = (fInput && fInput.value) ? fInput.value : arDateISO();
+    btnE.disabled = true; const t = btnE.textContent; btnE.textContent = "Enviando...";
+    try { const ok = await ejecutarEntregaGrupo(fecha); if (ok){ gruposAbiertosEnt = new Set(); refreshItemPillsEnt(); } }
+    finally { btnE.disabled = false; btnE.textContent = t; }
+  });
+
+  refreshItemPillsEnt();
+}
+
+// Filtra los botones por código o descripción (todas las palabras tipeadas deben matchear)
+function filtrarItemsEnt(q){
+  const toks = normalizeText(q).split(" ").filter(Boolean);
+  let visibles = 0;
+  psGrid.querySelectorAll(".item-cod-pill").forEach(btn => {
+    const hay = toks.every(t => btn.dataset.search.includes(t));
+    btn.classList.toggle("hidden", !hay);
+    if (hay) visibles++;
+  });
+  const vacio = document.getElementById("itemsVacioEnt");
+  if (vacio) vacio.classList.toggle("hidden", visibles > 0);
+}
+
+// Verde = item con algo cargado en el buffer (cajones, kg o unidades)
+function tieneCargaEnt(b){
+  return !!b && (Number(b.cajones) > 0 || parseDecimal(b.kg) > 0 || Number(b.unidades) > 0);
+}
+function refreshItemPillsEnt(){
+  psGrid.querySelectorAll(".item-cod-pill").forEach(btn => {
+    btn.classList.toggle("cargado", tieneCargaEnt(entregaBuf[btn.dataset.key]));
+  });
+}
+
+function upsertEntregaBuf(item, cajones, kg){
+  const key = `${item.sc}__${item.parte}`;
+  if (!entregaBuf[key]) entregaBuf[key] = { sc:item.sc, parte:item.parte, sp:item.sp, proceso:item.proceso, cajones:0, kg:"", tandas:[] };
+  if (cajones !== undefined) entregaBuf[key].cajones = cajones;
+  if (kg !== undefined) entregaBuf[key].kg = kg;
+  entregaBuf[key].sp = item.sp; entregaBuf[key].proceso = item.proceso;
+  refreshItemPillsEnt();
+}
+
+function abrirPopupGrupoEntrega(grupo) {
+  let ov = document.getElementById("popupGrupoEntOverlay");
+  if (!ov) {
+    ov = document.createElement("div");
+    ov.id = "popupGrupoEntOverlay";
+    ov.className = "popup-overlay hidden";
+    ov.innerHTML = `<div class="popup-box popup-grupo">
+      <div class="popup-head"><div id="popupGrupoEntTitle" class="popup-title"></div><button id="popupGrupoEntClose" type="button" class="popup-close">✕</button></div>
+      <div id="popupGrupoEntBody" class="popup-body"></div>
+      <div class="popup-grupo-actions"><button id="popupGrupoEntListo" class="btn-enviar" type="button">Listo</button></div>
+    </div>`;
+    document.body.appendChild(ov);
+    ov.addEventListener("click", (e)=>{ if(e.target===ov) ov.classList.add("hidden"); });
+    ov.querySelector("#popupGrupoEntClose").addEventListener("click", ()=>ov.classList.add("hidden"));
+    ov.querySelector("#popupGrupoEntListo").addEventListener("click", ()=>ov.classList.add("hidden"));
+  }
+  const rot = grupo.length === 1
+    ? `${codMostrarEnt(grupo[0])} · ${grupo[0].parte||""}`
+    : `${codMostrarEnt(grupo[0])} / ${codMostrarEnt(grupo[grupo.length-1])}`;
+  ov.querySelector("#popupGrupoEntTitle").textContent = `${aliasPS(selectedPS)} — ${rot}`;
+  renderGrupoPopupBodyEnt(grupo);
+  ov.classList.remove("hidden");
+}
+
+function renderGrupoPopupBodyEnt(grupo){
+  const ov = document.getElementById("popupGrupoEntOverlay");
+  if (!ov) return;
+  const abrevPS = (selectedPS||"").trim().slice(0,5);
+  // PS con sin_cajones (AJ Adhesivos: uni / Charcas: kg): una sola columna de carga, sin Cajón ni Tandas
+  const flags = getPSFlags(selectedPS);
+  const isSinCaj = flags.sinCajones;
+  const isUni = flags.cargaPorUnidades;
+  if (isSinCaj) { renderGrupoPopupBodySinCajEnt(grupo, isUni, abrevPS); return; }
+  const rows = grupo.map((item,i) => {
+    const spKey = normalizeText(item.sp);
+    const mv = stockDataCache ? stockDataCache.mvBySP.get(spKey) : null;
+    const onlineSP = mv ? Math.round(mv.onlineCaj) : "…";
+    const onlinePS = stockDataCache ? Math.round(stockDataCache.onlinePSCajGlobalBySP.get(spKey) || 0) : "…";
+    const negSP = (mv && mv.onlineCaj < 0) ? "pg-neg" : "";
+    const b = entregaBuf[`${item.sc}__${item.parte}`];
+    const tandasArr = (b && Array.isArray(b.tandas)) ? b.tandas : [];
+    const hayTandas = tandasArr.length > 0;
+    const totCaj = tandasArr.reduce((s,t)=>s+(Number(t.caj)||0),0);
+    const totKg = tandasArr.reduce((s,t)=>s+(parseDecimal(t.kg)||0),0);
+    const cajVal = hayTandas ? totCaj : (b ? (b.cajones||"") : "");
+    const kgVal = hayTandas ? (totKg>0?String(totKg):"") : (b ? (b.kg||"") : "");
+    const ro = hayTandas ? "readonly" : "";
+    const cajCls = hayTandas ? "pg-caj input-with-tandas" : "pg-caj";
+    const kgCls = hayTandas ? "pg-kg input-with-tandas" : "pg-kg";
+    return `<tr data-i="${i}">
+      <td class="pg-desc">${escapeHtml(item.parte)}</td>
+      <td>${escapeHtml(codMostrarEnt(item))}</td>
+      <td><input type="text" inputmode="decimal" class="${kgCls}" value="${kgVal}" placeholder="0,0" ${ro}></td>
+      <td><input type="text" inputmode="numeric" class="${cajCls}" value="${cajVal}" ${ro}></td>
+      <td><button type="button" class="tanda-trigger ${hayTandas?'has-tandas':''}" data-action="tandas-grupo-ent" title="Cargar por tandas">${hayTandas?tandasArr.length:'+'}</button></td>
+      <td class="pg-sep"></td>
+      <td class="right ${negSP}"><b>${onlineSP}</b></td>
+      <td>${escapeHtml(item.sp||"—")}</td>
+      <td class="right"><b>${onlinePS}</b></td>
+    </tr>`;
+  }).join("");
+  ov.querySelector("#popupGrupoEntBody").innerHTML = `
+    <table class="pg-table">
+      <thead><tr>
+        <th>Desc</th><th>Cód</th><th>KG</th><th>Cajón</th><th title="Tandas">T</th><th class="pg-sep"></th>
+        <th>Online<br>SP</th><th>SP</th><th>Online<br>${escapeHtml(abrevPS)}</th>
+      </tr></thead><tbody>${rows}</tbody>
+    </table>`;
+  ov.querySelectorAll("#popupGrupoEntBody tr[data-i]").forEach(tr => {
+    const item = grupo[Number(tr.dataset.i)];
+    const cajIn = tr.querySelector(".pg-caj");
+    const kgIn = tr.querySelector(".pg-kg");
+    if (cajIn && !cajIn.readOnly) cajIn.addEventListener("input", () => { cajIn.value = cajIn.value.replace(/\D/g,""); upsertEntregaBuf(item, parseInt(cajIn.value,10)||0, undefined); });
+    if (kgIn && !kgIn.readOnly) kgIn.addEventListener("input", () => { kgIn.value = kgIn.value.replace(/[^0-9,.]/g,""); upsertEntregaBuf(item, undefined, kgIn.value); });
+    const tBtn = tr.querySelector('[data-action="tandas-grupo-ent"]');
+    if (tBtn) tBtn.addEventListener("click", () => abrirTandasGrupoEnt(item, grupo));
+  });
+}
+
+// PS con sin_cajones: una sola columna de carga (Uni para AJ Adhesivos, Kg para Charcas). Sin Cajón ni Tandas.
+function renderGrupoPopupBodySinCajEnt(grupo, isUni, abrevPS){
+  const ov = document.getElementById("popupGrupoEntOverlay");
+  if (!ov) return;
+  const label = isUni ? "Uni" : "KG";
+  const rows = grupo.map((item,i) => {
+    const spKey = normalizeText(item.sp);
+    const mv = stockDataCache ? stockDataCache.mvBySP.get(spKey) : null;
+    const onlineSP = mv ? Math.round(mv.onlineCaj) : "…";
+    const onlinePS = stockDataCache ? Math.round(stockDataCache.onlinePSCajGlobalBySP.get(spKey) || 0) : "…";
+    const negSP = (mv && mv.onlineCaj < 0) ? "pg-neg" : "";
+    const b = entregaBuf[`${item.sc}__${item.parte}`];
+    const val = b ? (isUni ? (b.unidades || "") : (b.kg || "")) : "";
+    return `<tr data-i="${i}">
+      <td class="pg-desc">${escapeHtml(item.parte)}</td>
+      <td>${escapeHtml(codMostrarEnt(item))}</td>
+      <td><input type="text" inputmode="${isUni?'numeric':'decimal'}" class="pg-directo" value="${val}" placeholder="${isUni?'0':'0,0'}"></td>
+      <td class="pg-sep"></td>
+      <td class="right ${negSP}"><b>${onlineSP}</b></td>
+      <td>${escapeHtml(item.sp||"—")}</td>
+      <td class="right"><b>${onlinePS}</b></td>
+    </tr>`;
+  }).join("");
+  ov.querySelector("#popupGrupoEntBody").innerHTML = `
+    <table class="pg-table">
+      <thead><tr>
+        <th>Desc</th><th>Cód</th><th>${label}</th><th class="pg-sep"></th>
+        <th>Online<br>SP</th><th>SP</th><th>Online<br>${escapeHtml(abrevPS)}</th>
+      </tr></thead><tbody>${rows}</tbody>
+    </table>`;
+  ov.querySelectorAll("#popupGrupoEntBody tr[data-i]").forEach(tr => {
+    const item = grupo[Number(tr.dataset.i)];
+    const inp = tr.querySelector(".pg-directo");
+    if (!inp) return;
+    inp.addEventListener("input", () => {
+      inp.value = isUni ? inp.value.replace(/\D/g,"") : inp.value.replace(/[^0-9,.]/g,"");
+      upsertEntregaBufDirecto(item, inp.value, isUni);
+    });
+  });
+}
+
+// Buffer para PS sin_cajones: guarda unidades (AJ) o kg (Charcas); cajones siempre 0.
+function upsertEntregaBufDirecto(item, valor, isUni){
+  const key = `${item.sc}__${item.parte}`;
+  if (!entregaBuf[key]) entregaBuf[key] = { sc:item.sc, parte:item.parte, sp:item.sp, proceso:item.proceso, cajones:0, kg:"", unidades:0, tandas:[] };
+  const b = entregaBuf[key];
+  b.sp = item.sp; b.proceso = item.proceso; b.cajones = 0;
+  if (isUni) { b.unidades = parseInt(valor,10) || 0; b.kg = ""; }
+  else { b.kg = valor; b.unidades = 0; }
+  refreshItemPillsEnt();
+}
+
+function abrirTandasGrupoEnt(item, grupo){
+  const key = `${item.sc}__${item.parte}`;
+  let tandasIni = (entregaBuf[key] && Array.isArray(entregaBuf[key].tandas)) ? entregaBuf[key].tandas : [];
+  if (tandasIni.length === 0 && entregaBuf[key]){
+    const caj = Number(entregaBuf[key].cajones)||0, kg = parseDecimal(entregaBuf[key].kg);
+    if (caj>0||kg>0) tandasIni = [{caj,kg,uni:0}];
+  }
+  window.tandasPopup.open({
+    titulo:`Tandas — ${item.parte}`,
+    initial: tandasIni, pedirCaj:true, pedirKg:true, pedirUni:false,
+    onConfirm:(tandas, totales) => {
+      if (tandas.length===0 && totales.caj===0 && totales.kg===0){
+        delete entregaBuf[key];
+      } else {
+        if (!entregaBuf[key]) entregaBuf[key] = { sc:item.sc, parte:item.parte, sp:item.sp, proceso:item.proceso };
+        entregaBuf[key].tandas = tandas;
+        entregaBuf[key].cajones = totales.caj;
+        entregaBuf[key].kg = totales.kg>0?String(totales.kg):"";
+      }
+      renderGrupoPopupBodyEnt(grupo);
+      refreshItemPillsEnt();
+    }
+  });
+}
+
+async function ejecutarEntregaGrupo(fecha){
+  const items = Object.values(entregaBuf).filter(tieneCargaEnt);
+  if (!items.length){
+    alert(getPSFlags(selectedPS).cargaPorUnidades ? "Cargá al menos una unidad" : "Cargá al menos un cajón");
+    return false;
+  }
+  const ok = await mostrarConfirmacionEntregaPS(items);
+  if (!ok) return false;
+  const rows = items.map(b => {
+    const base = {
+      "Dia-mes": fecha,
+      "Prov_Serv": selectedPS,
+      "Sector SC": b.sc,
+      "Parte": b.parte,
+      "KG": parseDecimal(b.kg) > 0 ? parseDecimal(b.kg) : null,
+      "Cajones": parseInt(b.cajones) || 0,
+      "Sector SP": b.sp,
+      "Proceso": b.proceso,
+      "Faltante": false
+    };
+    // AJ Adhesivos (carga_por_unidades): la cantidad va en Unidades, igual que el flujo viejo
+    if (Number(b.unidades) > 0) base["Unidades"] = Number(b.unidades);
+    return base;
+  });
+  const { error } = await sb.from("Entregas PS").insert(rows);
+  if (error){ console.error(error); alert("Error al guardar: " + (error.message || "")); return false; }
+  clearEntregaBuf();
+  showSuccess(genNumericCode(4));
+  return true;
 }
 
 async function seleccionarPS(ps) {
@@ -426,23 +972,12 @@ async function seleccionarPS(ps) {
   setStatus("Buscando partes...", "");
 
   try {
-    fetchedItems = await getItemsPorPS(ps);
+    itemsBasePSEnt = await getItemsPorPS(ps);
 
-    selectedBadge.textContent = ps;
-    tableTitle.textContent = ps;
-
-    renderTable(fetchedItems);
-    showDetailView();
-
-    if (fetchedItems.length) {
-      setStatus("Proveedor cargado correctamente.", "ok");
-      setTableMsg("Completá solo cajones enteros mayores a 0.");
-    } else {
-      setStatus("No hay partes para ese proveedor.", "bad");
-      setTableMsg("No hay partes para ese proveedor.", "bad");
-    }
-
-    updateEnviarState();
+    // 2026-07-15: TODOS los PS usan el formato "1 boton por item + buscador" (antes solo Pedernera).
+    // El paso de familias y la tabla vieja (renderFamiliasEnt/renderTable) quedan sin usar en Entregas.
+    setStatus(itemsBasePSEnt.length ? "" : "No hay partes para ese proveedor.", itemsBasePSEnt.length ? "" : "bad");
+    renderGruposCodigoEnt();
   } catch (e) {
     console.error(e);
     setStatus("Error consultando partes.", "bad");
@@ -613,7 +1148,8 @@ function filterItemsToSend(items) {
  ***********************/
 btnVolver.addEventListener("click", () => {
   if (isSubmitting) return;
-  resetAll();
+  if (typeof backActionEnt === "function") backActionEnt();
+  else resetAll();
 });
 
 // Botón Limpiar: vacía todo lo cargado (inputs + tandas) del PS actual
@@ -727,6 +1263,9 @@ async function init() {
 
     renderPSButtons(availablePS);
     psGridWrap.classList.remove("hidden");
+
+    // Precarga datos de stock (Online SP / Online PS) en background
+    precargarDatosStock().catch(e => console.warn("Preload stock data fallo:", e));
 
     if (availablePS.length) {
       setStatus("Seleccioná un proveedor para continuar.", "bad");

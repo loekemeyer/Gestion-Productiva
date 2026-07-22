@@ -58,6 +58,11 @@ function clearBuffer() {
   actualizarBtnSiguiente();
 }
 
+function clearBufferPS(ps) {
+  const buf = getBuffer().filter(b => b.ps !== ps);
+  saveBuffer(buf);
+}
+
 function escapeHtml(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -557,7 +562,8 @@ async function precargarDatosStock() {
       -1
     ));
 
-    stockDataCache = { mvBySP, onlinePSCajGlobalBySP, onlinePSCajByPSAndSP, onlinePSKgByPSAndSP, onlinePSUniByPSAndSP };
+    stockDataCache = { mvBySP, onlinePSCajGlobalBySP, onlinePSCajByPSAndSP, onlinePSKgByPSAndSP, onlinePSUniByPSAndSP,
+      enviosAPSRows, entregasPSRows };
     return stockDataCache;
   })();
 
@@ -613,23 +619,26 @@ async function getPSDisponibles() {
   const { data, error } = await sb.from(SUPABASE_TABLE).select(COL_PS);
   if (error) throw error;
   // Cargar flags + especializacion de Tall_ProvAT_PS en paralelo
+  let psOcultos = new Set(); // nombres con ps=false (no mostrar como Prov Serv)
   try {
-    const { data: flagsData } = await sb.from("Tall_ProvAT_PS").select("nombre, carga_por_unidades, sin_cajones, especializacion");
+    const { data: flagsData } = await sb.from("Tall_ProvAT_PS").select("nombre, carga_por_unidades, sin_cajones, especializacion, ps");
     if (flagsData) {
       cargaPorUniMap = new Map(flagsData.map(r => [String(r.nombre || "").trim(), Boolean(r.carga_por_unidades)]));
       sinCajonesMap = new Map(flagsData.map(r => [String(r.nombre || "").trim(), Boolean(r.sin_cajones)]));
       procesoPorPSMap = new Map(flagsData.map(r => [String(r.nombre || "").trim(), (r.especializacion && String(r.especializacion).trim()) || "Sin asignar"]));
+      psOcultos = new Set(flagsData.filter(r => r.ps === false).map(r => String(r.nombre || "").trim().toLowerCase()));
     }
   } catch (e) {
     console.warn("No se pudo cargar flags PS:", e);
   }
-  return uniqueSorted((data || []).map(r => r[COL_PS]));
+  return uniqueSorted((data || []).map(r => r[COL_PS]))
+    .filter(n => !psOcultos.has(String(n || "").trim().toLowerCase()));
 }
 
 async function getItemsPorPS(ps) {
   const { data, error } = await sb
     .from(SUPABASE_TABLE)
-    .select(`${COL_PS}, ${COL_PROCESO}, ${COL_PARTE}, ${COL_SC}, ${COL_SP}`)
+    .select(`${COL_PS}, ${COL_PROCESO}, ${COL_PARTE}, ${COL_SC}, ${COL_SP}, "Cod_Prov_Externo"`)
     .eq(COL_PS, ps)
     .order(COL_PROCESO, { ascending: true })
     .order(COL_PARTE, { ascending: true });
@@ -645,14 +654,40 @@ async function getItemsPorPS(ps) {
     const psVal = String(r[COL_PS] || "").trim();
     const sc = String(r[COL_SC] || "").trim();
     const sp = String(r[COL_SP] || "").trim();
+    const cod = String(r["Cod_Prov_Externo"] || "").trim();
     if (!parte) return;
     const key = [parte, proceso, sc, sp].join("||");
     if (seen.has(key)) return;
     seen.add(key);
-    uniques.push({ ps: psVal, proceso, parte, sc, sp });
+    uniques.push({ ps: psVal, proceso, parte, sc, sp, cod });
   });
 
   return uniques;
+}
+
+// Acción del botón "Atras" del header, seteada por cada vista (procesos/PS/familias/tabla)
+let backActionEnvios = null;
+
+function goBackFromTable(){
+  // En la tabla. Si hay varias familias → volver a familias (preserva buffer).
+  if (familiaSeleccionada && itemsBasePS.length > 0 && familiasPresentes(itemsBasePS).size > 1) {
+    familiaSeleccionada = null;
+    fetchedItems = [];
+    renderFamilias();
+    mostrarFase(0);
+    return;
+  }
+  // Sino → volver a la lista de PS (o a procesos si el proceso tiene 1 solo PS)
+  selectedPS = "";
+  itemsBasePS = [];
+  fetchedItems = [];
+  familiaSeleccionada = null;
+  psGrid.querySelectorAll(".ps-pill").forEach(btn => btn.classList.remove("active"));
+  const provs = procesoSeleccionado ? (psPorProcesoMap.get(procesoSeleccionado) || []) : [];
+  if (procesoSeleccionado && provs.length > 1) renderPSDelProceso(procesoSeleccionado);
+  else { procesoSeleccionado = null; renderProcesos(); }
+  mostrarFase(0);
+  statusEl.textContent = "Selecciona un proveedor para continuar.";
 }
 
 function mostrarFase(n) {
@@ -660,7 +695,8 @@ function mostrarFase(n) {
   fase0.classList.toggle("hidden", n !== 0);
   fase1.classList.toggle("hidden", n !== 1);
   fase3.classList.toggle("hidden", n !== 3);
-  btnVolver.classList.toggle("hidden", n === 0 || n === 3);
+  if (n === 1) { btnVolver.classList.remove("hidden"); backActionEnvios = goBackFromTable; }
+  else if (n === 3) { btnVolver.classList.add("hidden"); }
   // Al entrar a Fase 1, resetear fecha a hoy
   if (n === 1) {
     const fechaInput = document.getElementById("fechaEnvio");
@@ -692,52 +728,157 @@ function renderPSButtons(values) {
     if (!psPorProcesoMap.has(proc)) psPorProcesoMap.set(proc, []);
     psPorProcesoMap.get(proc).push(ps);
   });
+  // Merge: Cementado + Templado → "Cementado / Templado"
+  const cem = psPorProcesoMap.get("Cementado") || [];
+  const tem = psPorProcesoMap.get("Templado") || [];
+  if (cem.length || tem.length){
+    psPorProcesoMap.set("Cementado / Templado", [...new Set([...cem, ...tem])]);
+    psPorProcesoMap.delete("Cementado");
+    psPorProcesoMap.delete("Templado");
+  }
   procesoSeleccionado = null;
   renderProcesos();
 }
 
-function renderProcesos() {
-  psGrid.innerHTML = "";
-  const procs = [...psPorProcesoMap.keys()].sort((a,b) => {
+function setEnviosPSTitulo(txt){
+  const h1 = document.querySelector(".header-top h1, .header-bar h1, h1");
+  if (h1) h1.textContent = txt;
+}
+
+// Alias de display (no cambia el nombre real/clave de DB)
+const PS_DISPLAY_ALIAS = { "gaston almafuerte": "Almafuerte" };
+function aliasPS(n){ return PS_DISPLAY_ALIAS[String(n || "").trim().toLowerCase()] || n; }
+
+// Orden custom de procesos solicitado por logística
+const ORDEN_PROCESOS = [
+  "Cromado", "Pintado", "Niquelado", "Pavonado",
+  "Cementado / Templado",
+  "Serigrafiado", "Rectificado",
+  "Cortado", "Calado",
+  "Adhesivado", "Armado"
+];
+function ordenarProcesos(arr){
+  const norm = s => String(s || "").trim().toLowerCase();
+  const idx = new Map(ORDEN_PROCESOS.map((p,i) => [norm(p), i]));
+  return [...arr].sort((a,b) => {
     if (a === "Sin asignar") return 1;
     if (b === "Sin asignar") return -1;
-    return a.localeCompare(b, "es");
+    const ia = idx.has(norm(a)) ? idx.get(norm(a)) : 999;
+    const ib = idx.has(norm(b)) ? idx.get(norm(b)) : 999;
+    if (ia !== ib) return ia - ib;
+    return String(a).localeCompare(String(b), "es");
   });
+}
+
+function renderProcesos() {
+  setEnviosPSTitulo("Envío a Proveedores de Servicios");
+  btnVolver.classList.add("hidden"); // en procesos no hay atras (salida = Inicio)
+  backActionEnvios = null;
+  psGrid.innerHTML = "";
+  const procs = ordenarProcesos([...psPorProcesoMap.keys()]);
   procs.forEach(proc => {
-    const cnt = psPorProcesoMap.get(proc).length;
+    const provs = (psPorProcesoMap.get(proc) || []).slice().sort((a,b) => a.localeCompare(b, "es"));
+    const provsArr = provs.map(aliasPS);
+    const provsHtml = provsArr.map(escapeHtml).join("<br>");
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "ps-pill proceso-pill";
-    btn.innerHTML = `${escapeHtml(proc)}<br><span style="font-size:11px;opacity:.75">${cnt} prov.</span>`;
+    btn.title = provsArr.join(", ");
+    btn.innerHTML = `${escapeHtml(proc)}<br><span style="font-size:12px;opacity:.85;font-weight:600">${provsHtml}</span>`;
     btn.addEventListener("click", () => {
       procesoSeleccionado = proc;
-      renderPSDelProceso(proc);
+      // Si el proceso tiene un solo PS, ir directo
+      if (provs.length === 1) {
+        seleccionarPS(provs[0]);
+      } else {
+        renderPSDelProceso(proc);
+      }
     });
     psGrid.appendChild(btn);
   });
 }
 
 function renderPSDelProceso(proc) {
+  setEnviosPSTitulo(`Envío · ${proc}`);
+  btnVolver.classList.remove("hidden"); // Atras → volver a procesos
+  backActionEnvios = () => renderProcesos();
   psGrid.innerHTML = "";
-  // Barra superior con back + label del proceso
-  const bar = document.createElement("div");
-  bar.style.cssText = "display:flex;align-items:center;gap:10px;width:100%;margin-bottom:10px";
-  bar.innerHTML = `<button type="button" class="ps-pill" style="background:#fff;color:#111;border:2px solid #d0d7de" id="psBackToProc">← Procesos</button>
-    <div style="font-weight:800;color:#555;text-transform:uppercase;letter-spacing:1px">${escapeHtml(proc)}</div>`;
-  psGrid.appendChild(bar);
-  document.getElementById("psBackToProc").addEventListener("click", () => renderProcesos());
   const list = psPorProcesoMap.get(proc) || [];
   list.sort((a,b) => a.localeCompare(b, "es")).forEach(ps => {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "ps-pill";
-    btn.textContent = ps;
+    btn.textContent = aliasPS(ps);
     btn.addEventListener("click", async () => {
       if (isSubmitting) return;
       await seleccionarPS(ps);
     });
     psGrid.appendChild(btn);
   });
+}
+
+// === Agrupado por familia (Pelador / Sacacorchos / Abrelatas / Otros) ===
+const FAMILIAS_ORDEN = ["Pelador", "Sacacorchos", "Abrelatas", "Otros"];
+// PSs que NO usan el paso de familias (van directo a la tabla completa)
+const PS_SIN_FAMILIAS = new Set([]);
+// PSs que usan agrupacion POR CODIGO (botones de 9 partes -> popup de envio)
+// 2026-07-15: Pedernera vuelve al flujo normal. renderGruposCodigo() queda sin usar (reversible: re-agregar "pedernera").
+const PS_POR_CODIGO = new Set([]);
+let itemsBasePS = [];
+let familiaSeleccionada = null;
+
+function clasificarFamilia(parte) {
+  const p = String(parte || '').toLowerCase();
+  if (/pelad|pelap/.test(p)) return 'Pelador';
+  if (/sacacorch|sac\s*comb|sac\s*mozo|sacatap|aleta|cabezal|destapacorona/.test(p)) return 'Sacacorchos';
+  if (/abrelat|maripos|varilla\s*c\/?\s*cuch|manija|mgo\s*plano|engranaje|cpo\s*u[ñn]a/.test(p)) return 'Abrelatas';
+  return 'Otros';
+}
+
+function familiasPresentes(items) {
+  const s = new Set();
+  items.forEach(it => s.add(clasificarFamilia(it.parte)));
+  return s;
+}
+
+function renderFamilias() {
+  setEnviosPSTitulo(`Envío a ${aliasPS(selectedPS)}`);
+  btnVolver.classList.remove("hidden"); // Atras → volver a PS/procesos
+  backActionEnvios = () => {
+    selectedPS = "";
+    itemsBasePS = [];
+    fetchedItems = [];
+    familiaSeleccionada = null;
+    const provs = procesoSeleccionado ? (psPorProcesoMap.get(procesoSeleccionado) || []) : [];
+    if (procesoSeleccionado && provs.length > 1) renderPSDelProceso(procesoSeleccionado);
+    else { procesoSeleccionado = null; renderProcesos(); }
+  };
+  psGrid.innerHTML = "";
+  familiaSeleccionada = null;
+  const counts = new Map();
+  itemsBasePS.forEach(it => {
+    const f = clasificarFamilia(it.parte);
+    counts.set(f, (counts.get(f) || 0) + 1);
+  });
+  FAMILIAS_ORDEN.forEach(fam => {
+    const cnt = counts.get(fam) || 0;
+    if (cnt === 0) return;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "ps-pill familia-pill";
+    btn.textContent = fam;
+    btn.addEventListener("click", () => seleccionarFamilia(fam));
+    psGrid.appendChild(btn);
+  });
+}
+
+function seleccionarFamilia(fam) {
+  familiaSeleccionada = fam;
+  fetchedItems = itemsBasePS.filter(it => clasificarFamilia(it.parte) === fam);
+  setEnviosPSTitulo(`Envío a ${aliasPS(selectedPS)} · ${fam}`);
+  renderizarFase1();
+  mostrarFase(1);
+  actualizarBtnSiguiente();
 }
 
 async function seleccionarPS(ps) {
@@ -748,13 +889,32 @@ async function seleccionarPS(ps) {
   statusEl.textContent = "Buscando partes...";
 
   try {
-    const itemsBase = await getItemsPorPS(ps);
-    fetchedItems = itemsBase;
+    itemsBasePS = await getItemsPorPS(ps);
 
+    // PS con agrupacion por codigo (Pedernera): botones de 9 partes -> popup
+    if (PS_POR_CODIGO.has(String(ps||"").trim().toLowerCase())) {
+      statusEl.textContent = "";
+      isSubmitting = false;
+      renderGruposCodigo();
+      return;
+    }
+
+    const fams = familiasPresentes(itemsBasePS);
+
+    if (fams.size > 1 && !PS_SIN_FAMILIAS.has(String(ps||"").trim().toLowerCase())) {
+      // Múltiples familias → mostrar selector intermedio
+      statusEl.textContent = "";
+      isSubmitting = false;
+      renderFamilias();
+      return;
+    }
+
+    // Única familia → ir directo a Fase 1
+    fetchedItems = itemsBasePS;
+    setEnviosPSTitulo(`Envío a ${aliasPS(selectedPS)}`);
     renderizarFase1();
     mostrarFase(1);
     statusEl.textContent = "";
-
     actualizarBtnSiguiente();
   } catch (e) {
     console.error(e);
@@ -918,7 +1078,6 @@ function renderizarFase1() {
 }
 
 function abrirPopupOnlinePS(sp, parte) {
-  const items = getBreakdownPorPS(sp);
   let overlay = document.getElementById("popupOverlay");
   if (!overlay) {
     overlay = document.createElement("div");
@@ -938,33 +1097,61 @@ function abrirPopupOnlinePS(sp, parte) {
     });
     overlay.querySelector("#popupClose").addEventListener("click", () => overlay.classList.add("hidden"));
   }
-  overlay.querySelector("#popupTitle").textContent = `Online PS — ${parte} (${sp})`;
   const body = overlay.querySelector("#popupBody");
-  if (!items.length) {
-    body.innerHTML = `<div class="popup-line">Sin stock online en ningún PS</div>`;
+
+  // Mes a filtrar: del input fecha (YYYY-MM-DD) o del mes actual
+  const fechaInput = document.getElementById("fechaEnvio");
+  let mesNum = "";
+  if (fechaInput && fechaInput.value) {
+    mesNum = fechaInput.value.slice(5, 7); // MM de YYYY-MM-DD
   } else {
-    // Por PS: si cargaPorUnidades → "X uni"; si sinCajones → "X kg"; else → "X kg — Y caj"
-    const lineas = items.map(x => {
-      const porUni = Boolean(cargaPorUniMap.get(x.ps));
-      const sinCaj = Boolean(sinCajonesMap.get(x.ps));
-      let valTxt;
-      if (porUni) valTxt = `${Math.round(x.uni)} uni`;
-      else if (sinCaj) valTxt = `${formatKg(x.kg)} kg`;
-      else valTxt = `${formatKg(x.kg)} kg — ${Math.round(x.caj)} caj`;
-      return `<div class="popup-line"><b>${escapeHtml(x.ps)}</b>: ${valTxt}</div>`;
-    });
-    // Totales separados según tipo
-    const totalKg = items.reduce((s, x) => s + (cargaPorUniMap.get(x.ps) ? 0 : x.kg), 0);
-    const totalUni = items.reduce((s, x) => s + (cargaPorUniMap.get(x.ps) ? x.uni : 0), 0);
-    const totalCaj = items.reduce((s, x) => s + ((sinCajonesMap.get(x.ps) || cargaPorUniMap.get(x.ps)) ? 0 : x.caj), 0);
-    const hayKg = items.some(x => !cargaPorUniMap.get(x.ps));
-    const hayUni = items.some(x => cargaPorUniMap.get(x.ps));
-    const hayCaj = items.some(x => !sinCajonesMap.get(x.ps) && !cargaPorUniMap.get(x.ps));
-    const partes = [];
-    if (hayKg) partes.push(`${formatKg(totalKg)} kg`);
-    if (hayUni) partes.push(`${Math.round(totalUni)} uni`);
-    if (hayCaj) partes.push(`${Math.round(totalCaj)} caj`);
-    body.innerHTML = lineas.join("") + `<div class="popup-line popup-total"><b>Total: ${partes.join(" — ")}</b></div>`;
+    mesNum = String(new Date().getMonth() + 1).padStart(2, "0");
+  }
+  const MESES = ["", "Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+  const mesNombre = MESES[parseInt(mesNum, 10)] || mesNum;
+
+  overlay.querySelector("#popupTitle").textContent = `Online PS — ${parte} (${sp}) · ${mesNombre}`;
+
+  const spKey = normalizeText(sp);
+  // Extrae MM de "DD/MM" o "DD-MM" o "DD/MM/AAAA"
+  const mmDe = (diaMes) => {
+    const m = String(diaMes || "").match(/^\s*\d{1,2}[\/\-](\d{1,2})/);
+    return m ? String(parseInt(m[1], 10)).padStart(2, "0") : "";
+  };
+  // día numérico para ordenar
+  const ddDe = (diaMes) => {
+    const m = String(diaMes || "").match(/^\s*(\d{1,2})/);
+    return m ? parseInt(m[1], 10) : 0;
+  };
+
+  const d = stockDataCache || {};
+  const envios = (d.enviosAPSRows || [])
+    .filter(r => normalizeText(r["Sector SP"]) === spKey && mmDe(r["Dia-mes"]) === mesNum)
+    .map(r => ({ fecha: r["Dia-mes"], dd: ddDe(r["Dia-mes"]), ps: String(r["Prov_Serv"]||"").trim(), caj: Number(r["Cajones"]||0), kg: parseDecimal(r["KG"]) }));
+  const entregas = (d.entregasPSRows || [])
+    .filter(r => normalizeText(r["Sector SP"]) === spKey && mmDe(r["Dia-mes"]) === mesNum)
+    .map(r => ({ fecha: r["Dia-mes"], dd: ddDe(r["Dia-mes"]), ps: String(r["Prov_Serv"]||"").trim(), caj: Number(r["Cajones"]||0), kg: parseDecimal(r["KG"]) }));
+
+  envios.sort((a,b) => a.dd - b.dd);
+  entregas.sort((a,b) => a.dd - b.dd);
+
+  const linea = (x) => `<div class="popup-line"><span style="display:inline-block;min-width:48px">${escapeHtml(x.fecha||"")}</span> <b>${escapeHtml(x.ps)}</b> — ${Math.round(x.caj)} caj · ${formatKg(x.kg)} kg</div>`;
+
+  if (!envios.length && !entregas.length) {
+    body.innerHTML = `<div class="popup-line">Sin envíos ni entregas en ${mesNombre}</div>`;
+  } else {
+    const sumCaj = arr => arr.reduce((s,x)=>s+x.caj,0);
+    const sumKg  = arr => arr.reduce((s,x)=>s+x.kg,0);
+    let html = "";
+    html += `<div class="popup-line popup-total"><b>📤 Envíos a PS (${envios.length})</b></div>`;
+    html += envios.length ? envios.map(linea).join("") : `<div class="popup-line zero">—</div>`;
+    html += `<div class="popup-line"><b>Subtotal: ${Math.round(sumCaj(envios))} caj · ${formatKg(sumKg(envios))} kg</b></div>`;
+    html += `<div class="popup-line popup-total" style="margin-top:8px"><b>📥 Entregas PS (${entregas.length})</b></div>`;
+    html += entregas.length ? entregas.map(linea).join("") : `<div class="popup-line zero">—</div>`;
+    html += `<div class="popup-line"><b>Subtotal: ${Math.round(sumCaj(entregas))} caj · ${formatKg(sumKg(entregas))} kg</b></div>`;
+    const netoCaj = sumCaj(envios) - sumCaj(entregas);
+    html += `<div class="popup-line popup-total" style="margin-top:8px"><b>En proceso (envíos − entregas): ${Math.round(netoCaj)} caj</b></div>`;
+    body.innerHTML = html;
   }
   overlay.classList.remove("hidden");
 }
@@ -1242,6 +1429,258 @@ function formatNumKg(n) {
   return Number(n || 0).toLocaleString('es-AR', { minimumFractionDigits: 0, maximumFractionDigits: 3 });
 }
 
+// === Núcleo de envío reutilizable (lee buffer del PS actual, valida, confirma, inserta) ===
+// Devuelve el código numérico si envió, o false si se canceló/falló.
+async function ejecutarEnvioPS(diaMes) {
+  const buf = getBuffer();
+  const itemsConCaj = buf.filter(b => b.ps === selectedPS && (
+    Number(b.cajones) > 0 || Number(b.unidades) > 0 || parseDecimal(b.kg) > 0
+  ));
+  if (!itemsConCaj.length) { alert("Cargá al menos un artículo"); return false; }
+  if (!sinCajones) {
+    const faltanKg = itemsConCaj.filter(b => Number(b.cajones) > 0 && !(parseDecimal(b.kg) > 0));
+    if (faltanKg.length) {
+      alert("Falta cargar Kg neto para: " + faltanKg.map(b => b.parte).join(", "));
+      return false;
+    }
+  }
+  const confirmado = await mostrarConfirmacionEnvio(itemsConCaj);
+  if (!confirmado) return false;
+  const payload = itemsConCaj.map(item => {
+    const base = {
+      "Dia-mes": diaMes,
+      "Prov_Serv": selectedPS,
+      "Sector SC": item.sc || "",
+      "Parte": item.parte || "",
+      "Faltante": !!item.faltante,
+      "Cajones": Number(item.cajones),
+      "Sector SP": item.sp || "",
+      "Proceso": item.proceso || ""
+    };
+    if (cargaPorUnidades) base["Unidades"] = parseInt(item.unidades || item.kg, 10) || 0;
+    else base["KG"] = parseDecimal(item.kg);
+    return base;
+  });
+  const { error } = await sb.from(TABLA_DESTINO).insert(payload);
+  if (error) { console.error(error); alert("Error: " + (error.message || "no se pudo enviar")); return false; }
+  const codigo = genNumericCode(4);
+  successCodeEl.textContent = codigo;
+  clearBuffer();
+  return codigo;
+}
+
+// === Pedernera: agrupación por código (botones de 9 partes) ===
+let gruposAbiertos = new Set(); // índices de grupos que se abrieron al menos una vez
+
+function renderGruposCodigo() {
+  setEnviosPSTitulo(`Envío a ${aliasPS(selectedPS)}`);
+  btnVolver.classList.remove("hidden");
+  gruposAbiertos = new Set(); // arranca todo en rojo
+  backActionEnvios = () => {
+    // Atras: reset total (default) + descartar lo cargado de este PS
+    clearBufferPS(selectedPS);
+    gruposAbiertos = new Set();
+    selectedPS = "";
+    itemsBasePS = [];
+    fetchedItems = [];
+    const provs = procesoSeleccionado ? (psPorProcesoMap.get(procesoSeleccionado) || []) : [];
+    if (procesoSeleccionado && provs.length > 1) renderPSDelProceso(procesoSeleccionado);
+    else { procesoSeleccionado = null; renderProcesos(); }
+  };
+  psGrid.innerHTML = "";
+  const sorted = [...itemsBasePS].sort((a, b) => {
+    const ca = a.cod || "zzzzzzzz", cb = b.cod || "zzzzzzzz";
+    return ca.localeCompare(cb, "es", { numeric: true });
+  });
+  const grupos = [];
+  for (let i = 0; i < sorted.length; i += 9) grupos.push(sorted.slice(i, i + 9));
+
+  grupos.forEach((grupo, gi) => {
+    const first = grupo[0].cod || "?";
+    const last = grupo[grupo.length - 1].cod || "?";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "ps-pill grupo-cod-pill" + (gruposAbiertos.has(gi) ? " abierto" : "");
+    btn.innerHTML = `${escapeHtml(first)}<br>${escapeHtml(last)}`;
+    btn.addEventListener("click", () => {
+      gruposAbiertos.add(gi);
+      btn.classList.add("abierto"); // pasa a verde (abierto al menos una vez)
+      abrirPopupGrupoEnvio(grupo);
+    });
+    psGrid.appendChild(btn);
+  });
+
+  // Acciones globales: fecha + Enviar (FUERA del popup)
+  const acciones = document.createElement("div");
+  acciones.className = "grupo-acciones";
+  acciones.innerHTML = `
+    <label for="fechaEnvioGrupos">Fecha:</label>
+    <input type="date" id="fechaEnvioGrupos">
+    <button id="btnEnviarGrupos" class="btn-enviar" type="button">Enviar</button>`;
+  psGrid.appendChild(acciones);
+  const fInput = acciones.querySelector("#fechaEnvioGrupos");
+  if (fInput && !fInput.value) fInput.value = new Date().toISOString().slice(0, 10);
+  acciones.querySelector("#btnEnviarGrupos").addEventListener("click", async (e) => {
+    const btnE = e.currentTarget;
+    let diaMes = getDiaMesHoy();
+    if (fInput && fInput.value) { const [y, m, d] = fInput.value.split("-"); diaMes = `${d}/${m}`; }
+    btnE.disabled = true; const t = btnE.textContent; btnE.textContent = "Enviando...";
+    try {
+      const codigo = await ejecutarEnvioPS(diaMes);
+      if (codigo) { gruposAbiertos = new Set(); mostrarFase(3); } // reset al default
+    } finally { btnE.disabled = false; btnE.textContent = t; }
+  });
+
+  mostrarFase(0);
+}
+
+// Escribe/actualiza una fila del grupo en el buffer (mismo formato que el flujo normal)
+function upsertBufGrupo(item, cajones, kg) {
+  const buf = getBuffer();
+  const key = `${selectedPS}__${item.sc}__${item.parte}`;
+  let b = buf.find(x => `${x.ps}__${x.sc}__${x.parte}` === key);
+  if (!b) {
+    b = { ps: selectedPS, sc: item.sc, parte: item.parte, sp: item.sp, proceso: item.proceso, cajones: 0, kg: "", faltante: false };
+    buf.push(b);
+  }
+  if (cajones !== undefined) b.cajones = cajones;
+  if (kg !== undefined) b.kg = kg;
+  b.sp = item.sp; b.proceso = item.proceso;
+  saveBuffer(buf);
+}
+
+function abrirPopupGrupoEnvio(grupo) {
+  let ov = document.getElementById("popupGrupoOverlay");
+  if (!ov) {
+    ov = document.createElement("div");
+    ov.id = "popupGrupoOverlay";
+    ov.className = "popup-overlay hidden";
+    ov.innerHTML = `
+      <div class="popup-box popup-grupo">
+        <div class="popup-head">
+          <div id="popupGrupoTitle" class="popup-title"></div>
+          <button id="popupGrupoClose" type="button" class="popup-close">✕</button>
+        </div>
+        <div id="popupGrupoBody" class="popup-body"></div>
+        <div class="popup-grupo-actions">
+          <button id="popupGrupoListo" class="btn-enviar" type="button">Listo</button>
+        </div>
+      </div>`;
+    document.body.appendChild(ov);
+    ov.addEventListener("click", (e) => { if (e.target === ov) ov.classList.add("hidden"); });
+    ov.querySelector("#popupGrupoClose").addEventListener("click", () => ov.classList.add("hidden"));
+    ov.querySelector("#popupGrupoListo").addEventListener("click", () => ov.classList.add("hidden"));
+  }
+  ov.querySelector("#popupGrupoTitle").textContent =
+    `${aliasPS(selectedPS)} — ${grupo[0].cod || "?"} / ${grupo[grupo.length - 1].cod || "?"}`;
+  renderGrupoPopupBody(grupo);
+  ov.classList.remove("hidden");
+}
+
+function renderGrupoPopupBody(grupo) {
+  const ov = document.getElementById("popupGrupoOverlay");
+  if (!ov) return;
+  const abrevPS = (selectedPS || "").trim().slice(0, 5);
+  const buf = getBuffer();
+  const rows = grupo.map((item, i) => {
+    const spKey = normalizeText(item.sp);
+    const mv = stockDataCache ? stockDataCache.mvBySP.get(spKey) : null;
+    const online = stockDataCache ? Math.round(stockDataCache.onlinePSCajGlobalBySP.get(spKey) || 0) : "…";
+    const onlineSP = mv ? Math.round(mv.onlineCaj) : "…";
+    const max = mv ? Math.round(mv.maxCajCerv) : "…";
+    const sug = stockDataCache ? (calcCajonesSugeridos(item.sp) ?? "…") : "…";
+    const bufItem = buf.find(b => `${b.ps}__${b.sc}__${b.parte}` === `${selectedPS}__${item.sc}__${item.parte}`);
+    const tandasArr = (bufItem && Array.isArray(bufItem.tandas)) ? bufItem.tandas : [];
+    const hayTandas = tandasArr.length > 0;
+    const totCaj = tandasArr.reduce((s, t) => s + (Number(t.caj) || 0), 0);
+    const totKg = tandasArr.reduce((s, t) => s + (parseDecimal(t.kg) || 0), 0);
+    const cajVal = hayTandas ? totCaj : (bufItem ? (bufItem.cajones || "") : "");
+    const kgVal = hayTandas ? (totKg > 0 ? String(totKg) : "") : (bufItem ? (bufItem.kg || "") : "");
+    const ro = hayTandas ? "readonly" : "";
+    const cajCls = hayTandas ? "pg-caj input-with-tandas" : "pg-caj";
+    const kgCls = hayTandas ? "pg-kg input-with-tandas" : "pg-kg";
+    const negSP = (mv && mv.onlineCaj < 0) ? "pg-neg" : "";
+    return `<tr data-i="${i}">
+      <td>${escapeHtml(item.cod || "—")}</td>
+      <td class="pg-desc">${escapeHtml(item.parte)}</td>
+      <td>${escapeHtml(item.sc || "—")}</td>
+      <td class="right"><b>${online}</b></td>
+      <td class="right ${negSP}"><b>${onlineSP}</b></td>
+      <td class="right"><b>${max}</b></td>
+      <td class="right"><b>${sug}</b></td>
+      <td class="pg-sep"></td>
+      <td><input type="text" inputmode="numeric" class="${cajCls}" value="${cajVal}" ${ro}></td>
+      <td><input type="text" inputmode="decimal" class="${kgCls}" value="${kgVal}" placeholder="0,0" ${ro}></td>
+      <td><button type="button" class="tanda-trigger ${hayTandas ? 'has-tandas' : ''}" data-action="tandas-grupo" title="Cargar por tandas">${hayTandas ? tandasArr.length : '+'}</button></td>
+    </tr>`;
+  }).join("");
+
+  ov.querySelector("#popupGrupoBody").innerHTML = `
+    <table class="pg-table">
+      <thead><tr>
+        <th>Código</th><th>Desc</th><th>SC</th><th>Online<br>${escapeHtml(abrevPS)}</th><th>Online<br>SP</th><th>Max<br>SP</th>
+        <th>Cajón a<br>Enviar</th><th class="pg-sep"></th><th>Cajón<br>Enviado</th><th>KG</th><th title="Tandas">T</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+
+  ov.querySelectorAll("#popupGrupoBody tr[data-i]").forEach(tr => {
+    const item = grupo[Number(tr.dataset.i)];
+    const cajIn = tr.querySelector(".pg-caj");
+    const kgIn = tr.querySelector(".pg-kg");
+    if (cajIn && !cajIn.readOnly) cajIn.addEventListener("input", () => {
+      cajIn.value = cajIn.value.replace(/\D/g, "");
+      upsertBufGrupo(item, parseInt(cajIn.value, 10) || 0, undefined);
+    });
+    if (kgIn && !kgIn.readOnly) kgIn.addEventListener("input", () => {
+      kgIn.value = kgIn.value.replace(/[^0-9,.]/g, "");
+      upsertBufGrupo(item, undefined, kgIn.value);
+    });
+    const tBtn = tr.querySelector('[data-action="tandas-grupo"]');
+    if (tBtn) tBtn.addEventListener("click", () => abrirTandasGrupo(item, grupo));
+  });
+}
+
+// Tandas para una fila del popup de grupo (Cajón Enviado + KG por tandas)
+function abrirTandasGrupo(item, grupo) {
+  const bufKey = `${selectedPS}__${item.sc}__${item.parte}`;
+  const buf = getBuffer();
+  const bi = buf.findIndex(b => `${b.ps}__${b.sc}__${b.parte}` === bufKey);
+  let tandasIni = (bi >= 0 && Array.isArray(buf[bi].tandas)) ? buf[bi].tandas : [];
+  if (tandasIni.length === 0 && bi >= 0) {
+    const caj = Number(buf[bi].cajones) || 0, kg = parseDecimal(buf[bi].kg);
+    if (caj > 0 || kg > 0) tandasIni = [{ caj, kg, uni: 0 }];
+  }
+  window.tandasPopup.open({
+    titulo: `Tandas — ${item.parte}`,
+    initial: tandasIni,
+    pedirCaj: true,
+    pedirKg: true,
+    pedirUni: false,
+    onConfirm: (tandas, totales) => {
+      const b2 = getBuffer();
+      const i2 = b2.findIndex(b => `${b.ps}__${b.sc}__${b.parte}` === bufKey);
+      if (tandas.length === 0 && totales.caj === 0 && totales.kg === 0) {
+        if (i2 >= 0) {
+          b2[i2].tandas = [];
+          b2[i2].cajones = 0;
+          b2[i2].kg = "";
+          if (!Number(b2[i2].unidades || 0)) b2.splice(i2, 1);
+          saveBuffer(b2);
+        }
+      } else {
+        const ni = i2 >= 0 ? b2[i2] : { ps: selectedPS, parte: item.parte, proceso: item.proceso, sc: item.sc, sp: item.sp, faltante: false };
+        ni.tandas = tandas;
+        ni.cajones = totales.caj;
+        ni.kg = totales.kg > 0 ? String(totales.kg) : "";
+        if (i2 >= 0) b2[i2] = ni; else b2.push(ni);
+        saveBuffer(b2);
+      }
+      renderGrupoPopupBody(grupo);
+    }
+  });
+}
+
 btnEnviar.addEventListener("click", async () => {
   // Defensivo: persistir valores del DOM por si el operario clickea Enviar sin perder focus.
   // Skip inputs READONLY (tienen tandas — el valor mostrado es derivado y se perdería).
@@ -1265,74 +1704,19 @@ btnEnviar.addEventListener("click", async () => {
     }
   });
 
-  const buf = getBuffer();
-  const itemsConCaj = buf.filter(b => b.ps === selectedPS && (
-    Number(b.cajones) > 0 || Number(b.unidades) > 0 || parseDecimal(b.kg) > 0
-  ));
-
-  if (!itemsConCaj.length) {
-    alert("Cargá al menos un artículo");
-    return;
+  const fechaInput = document.getElementById("fechaEnvio");
+  let diaMes = getDiaMesHoy();
+  if (fechaInput && fechaInput.value) {
+    const [y, m, d] = fechaInput.value.split("-");
+    diaMes = `${d}/${m}`;
   }
-
-  // Para PSs con cajones (no sinCajones): validar que tengan kg cargado para cada fila con cajones
-  if (!sinCajones) {
-    const faltanKg = itemsConCaj.filter(b => Number(b.cajones) > 0 && !(parseDecimal(b.kg) > 0));
-    if (faltanKg.length) {
-      alert("Falta cargar Kg neto para: " + faltanKg.map(b => b.parte).join(", "));
-      return;
-    }
-  }
-
-  // Confirmación visual antes de insertar
-  const confirmado = await mostrarConfirmacionEnvio(itemsConCaj);
-  if (!confirmado) return;
 
   btnEnviar.disabled = true;
   const textOriginal = btnEnviar.textContent;
   btnEnviar.textContent = "Enviando...";
-
   try {
-    // Tomar fecha seleccionada (default hoy). Convertir YYYY-MM-DD → DD/MM
-    const fechaInput = document.getElementById("fechaEnvio");
-    let diaMes = getDiaMesHoy();
-    if (fechaInput && fechaInput.value) {
-      const [y, m, d] = fechaInput.value.split("-");
-      diaMes = `${d}/${m}`;
-    }
-    const payload = itemsConCaj.map(item => {
-      const base = {
-        "Dia-mes": diaMes,
-        "Prov_Serv": selectedPS,
-        "Sector SC": item.sc || "",
-        "Parte": item.parte || "",
-        "Faltante": !!item.faltante,
-        "Cajones": Number(item.cajones),
-        "Sector SP": item.sp || "",
-        "Proceso": item.proceso || ""
-      };
-      if (cargaPorUnidades) {
-        // PS con carga_por_unidades=TRUE (Charcas, AJ Adhesivos): guardar en Unidades, KG queda null
-        // Para sinCajones (input directo Fase 1) el valor queda en item.unidades.
-        // Para flujo normal con cargaPorUnidades el operario lo carga como "kg" en Fase 2.
-        base["Unidades"] = parseInt(item.unidades || item.kg, 10) || 0;
-      } else {
-        base["KG"] = parseDecimal(item.kg);
-      }
-      return base;
-    });
-
-    const { error } = await sb.from(TABLA_DESTINO).insert(payload);
-    if (error) throw error;
-
-    const codigo = genNumericCode(4);
-    successCodeEl.textContent = codigo;
-
-    clearBuffer();
-    mostrarFase(3);
-  } catch (err) {
-    console.error(err);
-    alert("Error: " + (err.message || "no se pudo enviar"));
+    const codigo = await ejecutarEnvioPS(diaMes);
+    if (codigo) mostrarFase(3);
   } finally {
     btnEnviar.disabled = false;
     btnEnviar.textContent = textOriginal;
@@ -1340,14 +1724,7 @@ btnEnviar.addEventListener("click", async () => {
 });
 
 btnVolver.addEventListener("click", () => {
-  selectedPS = "";
-  fetchedItems = [];
-  clearBuffer();
-  psGrid.querySelectorAll(".ps-pill").forEach(btn => {
-    btn.classList.remove("active");
-  });
-  mostrarFase(0);
-  statusEl.textContent = "Selecciona un proveedor para continuar.";
+  if (typeof backActionEnvios === "function") backActionEnvios();
 });
 
 // Botón Limpiar: vacía todo lo cargado (cajones, kg, tandas) del PS actual
@@ -1374,17 +1751,21 @@ if (btnLimpiar) {
 
 btnVolverPS.addEventListener("click", () => {
   selectedPS = "";
+  itemsBasePS = [];
   fetchedItems = [];
+  familiaSeleccionada = null;
   clearBuffer();
-  psGrid.querySelectorAll(".ps-pill").forEach(btn => {
-    btn.classList.remove("active");
-  });
+  psGrid.querySelectorAll(".ps-pill").forEach(btn => btn.classList.remove("active"));
+  if (procesoSeleccionado) renderPSDelProceso(procesoSeleccionado);
+  else renderProcesos();
   mostrarFase(0);
   statusEl.textContent = "Selecciona un proveedor para continuar.";
 });
 
 async function init() {
   try {
+    // Reload = empezar de cero (descartar lo que hubiera quedado en el buffer)
+    clearBuffer();
     statusEl.textContent = "Cargando proveedores...";
     availablePS = await getPSDisponibles();
     renderPSButtons(availablePS);
