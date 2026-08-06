@@ -1,0 +1,10 @@
+{
+  "caveman": true,
+  "tablas_compactas": true,
+  "comandos": {
+    "resumen-dia": {
+      "enabled": true,
+      "desc": "Reporte del día en bullet points"
+    }
+  }
+}

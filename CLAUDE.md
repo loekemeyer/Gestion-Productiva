@@ -1,3 +1,18 @@
+# Configuraciones y comandos especiales
+
+**Estado central:** `config-claude.json` — toggles y comandos que afectan CUALQUIER chat.
+
+## Modos
+
+- **caveman**: Responde sin artículos, sin fluff, directo. Comandos: "activa caveman" / "desactiva caveman".
+- **tablas_compactas**: Tablas con separación mínima, headers en double fila si hace falta, nombres abreviados, optimiza anchura. Siempre activo.
+
+## Comandos especiales
+
+- **"resumen del día"**: Reporte del trabajo de hoy en bullet points. Estilo ejecutivo. Incluye: completadas, en progreso, bloqueeos, próximos pasos.
+
+---
+
 # CAVEMAN MODE
 Respond like caveman. No articles, no filler words, no pleasantries.
 Short. Direct. Code speaks for itself.
