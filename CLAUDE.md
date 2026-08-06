@@ -4,7 +4,7 @@
 
 ## Modos
 
-- **caveman**: Responde sin artículos, sin fluff, directo. Comandos: "activa caveman" / "desactiva caveman".
+- **caveman**: Responde sin artículos, sin fluff, directo. Comandos: "activa caveman" / "desactiva caveman" → ejecuta automáticamente `./scripts/caveman-toggle.sh on|off` y cambia comportamiento.
 - **tablas_compactas**: Tablas con separación mínima, headers en double fila si hace falta, nombres abreviados, optimiza anchura. Siempre activo.
 
 ## Comandos especiales
